@@ -1,7 +1,11 @@
 packages:
   - packages/*
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-ignoredBuiltDependencies:
-  - unrs-resolver
+
+# The lockfile is committed and installed with --frozen-lockfile, so exact
+# versions are already pinned. Allow the freshly published releases it pins.
+minimumReleaseAge: 0
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: false

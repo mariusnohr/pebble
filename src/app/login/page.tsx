@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { verifyAdmin } from "@/server/auth";
+import { adminPasswordHash } from "@/server/config";
 import { Brand, PebbleMark } from "@/components/brand";
 import { LoginForm } from "@/components/login-form";
 import { ThemeToggle } from "@/components/theme-provider";
@@ -7,7 +8,7 @@ import { ThemeToggle } from "@/components/theme-provider";
 export const dynamic = "force-dynamic";
 export default async function LoginPage() {
   if (await verifyAdmin()) redirect("/");
-  const configured = Boolean(process.env.DATABASE_URL && process.env.ADMIN_PASSWORD_HASH);
+  const configured = Boolean(process.env.DATABASE_URL && adminPasswordHash());
   return (
     <main className="login-page">
       <div className="login-top">

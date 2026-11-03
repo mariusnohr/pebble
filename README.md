@@ -33,13 +33,22 @@ Open http://localhost:3000, sign in, create a project, and follow its Settings p
 
 ```sh
 pnpm build
-pnpm db:migrate
 pnpm start
 ```
 
-Supply environment variables through your own setup. Run migrations once as a release step, not on every request. `pnpm start` uses Next.js's Node server; no platform-specific runtime or external queue is required. Keep Postgres persistent and backed up.
+`pnpm build` produces a standalone Next.js server and applies pending database migrations when `DATABASE_URL` is set. Without `DATABASE_URL` the migration step is skipped, so local builds do not need a live database. You can also run `pnpm db:migrate` separately as a release step; it is idempotent. `pnpm start` serves the build with Next.js's Node server. Keep Postgres persistent and backed up.
 
-`GET /api/health` checks the process; `GET /api/ready` checks the database and migrated schema. The build does not require a live database or production secrets.
+### Environment variables
+
+| Variable              | Required | Purpose                                                                                                                                                                  |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`        | Yes      | PostgreSQL connection string. The database user needs permission to run migrations and access Pebble's tables.                                                           |
+| `APP_URL`             | Yes      | Public origin used for the admin cookie and same-origin checks, for example `https://pebble.example.com`. It must match exactly, including the port in development.      |
+| `ADMIN_PASSWORD_HASH` | Yes      | The `scrypt$…` value printed by `pnpm password:hash`. Paste only the value, without the `ADMIN_PASSWORD_HASH=` prefix. Changing it invalidates admin sessions.           |
+| `TRUST_PROXY`         | No       | Set to `true` only when a trusted reverse proxy overwrites `X-Real-IP` and Node is not directly reachable. Defaults to `false`, which uses one shared rate-limit bucket. |
+| `PORT` / `HOSTNAME`   | No       | The standalone server reads these when starting. Most hosts provide them; they are not normally set by hand.                                                             |
+
+`TEST_DATABASE_URL` is only used by the integration tests. `GET /api/health` checks the process; `GET /api/ready` checks the database and migrated schema.
 
 Run `pnpm db:cleanup` daily using your own scheduler to enforce each project's retention and remove expired sessions/rate-limit buckets. The default retention is 90 days. Cleanup deletes raw history permanently; there are no long-term rollups yet.
 
