@@ -9,6 +9,7 @@ import { getDb } from "@/db";
 import { apiKeys, projects } from "@/db/schema";
 import { normalizeOrigins, projectSchema } from "@/lib/contracts";
 import { assertSameOrigin, createAdminSession, destroyAdminSession, requireAdmin } from "./auth";
+import { adminPasswordHash } from "./config";
 import { hashToken, randomToken, verifyPassword } from "./crypto";
 import { clientAddress, rateLimit } from "./rate-limit";
 
@@ -17,13 +18,14 @@ export type ActionState = { error?: string; success?: string; secret?: string; p
 export async function loginAction(_: ActionState, form: FormData): Promise<ActionState> {
   await assertSameOrigin();
   const password = String(form.get("password") ?? "");
-  if (!process.env.ADMIN_PASSWORD_HASH || !process.env.DATABASE_URL)
+  const passwordHash = adminPasswordHash();
+  if (!passwordHash || !process.env.DATABASE_URL)
     return { error: "Finish the environment setup in the README before signing in." };
   if (!password || password.length > 1024) return { error: "Enter your admin password." };
   try {
     if (!(await rateLimit(`login:${clientAddress(await headers())}`, 10, 300)))
       return { error: "Too many attempts. Try again in five minutes." };
-    if (!(await verifyPassword(password, process.env.ADMIN_PASSWORD_HASH)))
+    if (!(await verifyPassword(password, passwordHash)))
       return { error: "That password isn’t correct." };
     await createAdminSession();
   } catch {

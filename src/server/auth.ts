@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminSessions } from "@/db/schema";
+import { adminPasswordHash } from "./config";
 import { hashToken, randomToken } from "./crypto";
 
 const COOKIE = "pebble_admin";
@@ -13,7 +14,8 @@ export function appOrigin() {
 
 export async function verifyAdmin() {
   const token = (await cookies()).get(COOKIE)?.value;
-  if (!token || !process.env.ADMIN_PASSWORD_HASH) return false;
+  const passwordHash = adminPasswordHash();
+  if (!token || !passwordHash) return false;
   const [session] = await getDb()
     .select()
     .from(adminSessions)
@@ -21,7 +23,7 @@ export async function verifyAdmin() {
       and(
         eq(adminSessions.tokenHash, hashToken(token)),
         gt(adminSessions.expiresAt, new Date()),
-        eq(adminSessions.passwordVersion, hashToken(process.env.ADMIN_PASSWORD_HASH)),
+        eq(adminSessions.passwordVersion, hashToken(passwordHash)),
       ),
     )
     .limit(1);
@@ -37,6 +39,8 @@ export async function assertSameOrigin() {
 }
 
 export async function createAdminSession() {
+  const passwordHash = adminPasswordHash();
+  if (!passwordHash) throw new Error("ADMIN_PASSWORD_HASH is not configured.");
   const token = randomToken();
   const expiresAt = new Date(Date.now() + 7 * 86400000);
   await getDb()
@@ -44,7 +48,7 @@ export async function createAdminSession() {
     .values({
       tokenHash: hashToken(token),
       expiresAt,
-      passwordVersion: hashToken(process.env.ADMIN_PASSWORD_HASH!),
+      passwordVersion: hashToken(passwordHash),
     });
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,

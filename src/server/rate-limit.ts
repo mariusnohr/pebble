@@ -2,6 +2,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { rateLimits } from "@/db/schema";
+import { adminPasswordHash } from "./config";
 import { hashToken } from "./crypto";
 
 export async function rateLimit(key: string, limit: number, seconds = 60) {
@@ -9,7 +10,7 @@ export async function rateLimit(key: string, limit: number, seconds = 60) {
   const [row] = await getDb()
     .insert(rateLimits)
     .values({
-      key: hashToken(`${process.env.ADMIN_PASSWORD_HASH}:${key}:${bucket}`),
+      key: hashToken(`${adminPasswordHash() ?? ""}:${key}:${bucket}`),
       count: 1,
       expiresAt: new Date((bucket + 1) * seconds * 1000),
     })
