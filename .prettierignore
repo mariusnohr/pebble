@@ -1,0 +1,10 @@
+node_modules
+.next
+coverage
+packages/analytics/dist
+public/tracker.v1.js
+pnpm-lock.yaml
+drizzle/meta
+next-env.d.ts
+*.tsbuildinfo
+.env*
