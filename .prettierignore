@@ -1,5 +1,7 @@
 node_modules
 .nohr
+# Product spec is managed by Nohr and must not be rewritten by implementation tasks.
+docs/spec.md
 .next
 coverage
 packages/analytics/dist

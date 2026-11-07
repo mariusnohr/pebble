@@ -109,4 +109,55 @@ export const rateLimits = pgTable("rate_limits", {
   expiresAt: time("expires_at").notNull(),
 });
 
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull(),
+    uniqueKey: text("unique_key").notNull().unique(),
+    runAt: time("run_at").notNull(),
+    lockedUntil: time("locked_until"),
+    attempts: integer("attempts").notNull().default(0),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    lastError: text("last_error"),
+    finishedAt: time("finished_at"),
+  },
+  (t) => [
+    index("jobs_due")
+      .on(t.kind, t.runAt)
+      .where(sql`${t.finishedAt} is null`),
+    index("jobs_finished").on(t.finishedAt),
+    check("jobs_attempts_nonnegative", sql`${t.attempts} >= 0`),
+  ],
+);
+
+export const emailOutbox = pgTable(
+  "email_outbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    to: text("to").notNull(),
+    template: text("template").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status", { enum: ["queued", "sent", "failed"] })
+      .notNull()
+      .default("queued"),
+    failureReason: text("failure_reason"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: time("next_attempt_at").notNull().defaultNow(),
+    sentAt: time("sent_at"),
+    providerId: text("provider_id"),
+    // Durable clocks for purging every status and bounding retries across restarts.
+    createdAt: time("created_at").notNull().defaultNow(),
+    firstAttemptAt: time("first_attempt_at"),
+  },
+  (t) => [
+    index("email_outbox_due")
+      .on(t.nextAttemptAt)
+      .where(sql`${t.status} = 'queued'`),
+    index("email_outbox_created").on(t.createdAt),
+    check("email_outbox_status", sql`${t.status} in ('queued', 'sent', 'failed')`),
+    check("email_outbox_attempts_nonnegative", sql`${t.attempts} >= 0`),
+  ],
+);
+
 export type Project = typeof projects.$inferSelect;

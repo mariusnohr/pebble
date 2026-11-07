@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "node --conditions=react-server --import tsx --test tests/*.test.ts",
-    "test:integration": "node --conditions=react-server --import tsx --test tests/integration/*.test.ts",
+    "test:integration": "node --conditions=react-server --import tsx --test --test-concurrency=1 tests/integration/*.test.ts",
     "sdk:build": "node scripts/build-sdk.mjs && tsc -p packages/analytics/tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",

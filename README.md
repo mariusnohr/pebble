@@ -40,17 +40,58 @@ pnpm start
 
 ### Environment variables
 
-| Variable              | Required | Purpose                                                                                                                                                                  |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`        | Yes      | PostgreSQL connection string. The database user needs permission to run migrations and access Pebble's tables.                                                           |
-| `APP_URL`             | Yes      | Public origin used for the admin cookie and same-origin checks, for example `https://pebble.example.com`. It must match exactly, including the port in development.      |
-| `ADMIN_PASSWORD_HASH` | Yes      | The `scrypt$…` value printed by `pnpm password:hash`. Paste only the value, without the `ADMIN_PASSWORD_HASH=` prefix. Changing it invalidates admin sessions.           |
-| `TRUST_PROXY`         | No       | Set to `true` only when a trusted reverse proxy overwrites `X-Real-IP` and Node is not directly reachable. Defaults to `false`, which uses one shared rate-limit bucket. |
-| `PORT` / `HOSTNAME`   | No       | The standalone server reads these when starting. Most hosts provide them; they are not normally set by hand.                                                             |
+| Variable              | Required    | Purpose                                                                                                                                                                  |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`        | Yes         | PostgreSQL connection string. The database user needs permission to run migrations and access Pebble's tables.                                                           |
+| `APP_URL`             | Yes         | Public origin used for the admin cookie and same-origin checks, for example `https://pebble.example.com`. It must match exactly, including the port in development.      |
+| `ADMIN_PASSWORD_HASH` | Yes         | The `scrypt$…` value printed by `pnpm password:hash`. Paste only the value, without the `ADMIN_PASSWORD_HASH=` prefix. Changing it invalidates admin sessions.           |
+| `TRUST_PROXY`         | No          | Set to `true` only when a trusted reverse proxy overwrites `X-Real-IP` and Node is not directly reachable. Defaults to `false`, which uses one shared rate-limit bucket. |
+| `PORT` / `HOSTNAME`   | No          | The standalone server reads these when starting. Most hosts provide them; they are not normally set by hand.                                                             |
+| `RESEND_API_KEY`      | For email   | Resend API key. Enables the Resend HTTP transport unless explicit log mode is selected.                                                                                  |
+| `EMAIL_FROM`          | With Resend | Verified sending address, optionally with a display name, e.g. `Pebble <notifications@example.com>`.                                                                     |
+| `EMAIL_TRANSPORT`     | No          | Set to `log` **on preview only** to log recipient, subject and links instead of sending. Never set log mode in production.                                               |
 
 `TEST_DATABASE_URL` is only used by the integration tests. `GET /api/health` checks the process; `GET /api/ready` checks the database and migrated schema.
 
-Run `pnpm db:cleanup` daily using your own scheduler to enforce each project's retention and remove expired sessions/rate-limit buckets. The default retention is 90 days. Cleanup deletes raw history permanently; there are no long-term rollups yet.
+### Background jobs and email
+
+Next.js instrumentation starts the in-process runner in the Node runtime when `DATABASE_URL` is set. It does not start during `next build` or in the Edge runtime. No external scheduler or separate worker is needed. The runner ticks immediately at startup and every 30 seconds thereafter:
+
+| Job         | Schedule           | Work                                                                                                                       |
+| ----------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `retention` | Daily at 03:00 UTC | Delete events by `occurred_at` and visits by `last_seen_at`, using each project's retention.                               |
+| `purge`     | Daily at 03:30 UTC | Delete expired admin sessions and rate-limit buckets, finished jobs older than 7 days, and outbox rows older than 30 days. |
+| `outbox`    | Every tick         | Send due queued emails, at most 25 rows / roughly 20 seconds per run (an in-flight request may take another 10 seconds).   |
+
+Daily schedules have unique keys such as `retention:2026-11-08`. Startup catches up the most recent due day and schedules the next day. Claims use `FOR UPDATE SKIP LOCKED` and two-minute leases. PostgreSQL advisory locks allow at most one running job per kind across overlapping app processes, even when a run outlasts its lease. A disconnected worker's lease can be reclaimed. Handlers must be idempotent; SQL cleanup safely repeats committed batches, and Resend deduplicates sends with the outbox UUID as `Idempotency-Key`. Every completed/failed run emits one JSON line with `kind`, `duration_ms` and `outcome`; startup emits `job_runner_started`. Payloads and exception messages are never included in job logs.
+
+Failed jobs receive at most five retries after the initial attempt, delayed by 30 seconds, 2, 5, 10 and 20 minutes. Exhausted jobs retain a `last_error` and `finished_at`. Email attempts use the same backoff, with a 10-second HTTP timeout and a hard one-hour window from the first attempt, including time spent down. Timeouts, network errors, HTTP 5xx, 409, 408 and 429 retry; other HTTP failures stop immediately. The sender persists attempts before HTTP, and records `sent_at` and `provider_id` only after success. A crash after provider acceptance retries with the same key. `next_attempt_at` also leases an in-flight outbox row for one minute. The `created_at` and `first_attempt_at` outbox columns provide durable purge and retry clocks.
+
+`pnpm db:cleanup` remains available for manual maintenance. It calls the same `cleanupRetention` and `purgeMaintenance` functions as the jobs, keeping all deletes bounded to 5,000 rows per statement. Effective retention is the project's own setting until plans arrive; the default is 90 days. Cleanup permanently deletes raw history; there are no long-term rollups yet.
+
+Feature code queues mail **inside the transaction that makes its corresponding change**, using `queueEmail` from `src/server/email/queue.ts`:
+
+```ts
+await db.transaction(async (tx) => {
+  // Persist the feature's change with tx, then queue its email with the same tx.
+  await queueEmail(tx, {
+    to: "colleague@example.com",
+    template: "message",
+    data: {
+      subject: "Project update",
+      heading: "Your project was updated",
+      paragraphs: ["Open the project to see the change."],
+      organizationName: "Acme",
+      projectName: "Website",
+      links: [{ label: "Open project", path: "/projects/project-id" }],
+    },
+  });
+});
+```
+
+`queueEmail` returns the outbox UUID. The generic `message` template is a foundation; product templates are added in `src/server/email/templates.ts` with their features. The shared plain layout escapes HTML, includes organization/project names when provided, and renders a text alternative. Link paths must resolve within `APP_URL`; external links are rejected.
+
+Without `RESEND_API_KEY` or explicit `EMAIL_TRANSPORT=log`, queued rows become `failed` with `failure_reason=not_configured`. Startup warns **once per process**: `Email is not configured`. Failure logs contain only the template and a fixed reason, never provider responses, links, tokens or recipients. Explicit preview log mode prints recipient, subject and links, and marks the row sent; it is a diagnostic transport and cannot guarantee deduplicated log output across crashes. Resend mode additionally requires `EMAIL_FROM` and a verified sending domain. Set `APP_URL` to the public origin used in email links.
 
 Leave `TRUST_PROXY=false` unless a trusted reverse proxy overwrites `X-Real-IP` and direct access to Node is blocked. Without it, rate limits use a shared bucket. Pebble never persists raw IP addresses. Production `APP_URL` should use HTTPS so the admin cookie is secure.
 
@@ -172,7 +213,7 @@ pnpm test          # Unit and SDK tests
 pnpm check         # Formatting, lint, types, and unit tests
 ```
 
-Database integration tests need a **dedicated** database whose name starts with `pebble_test`. They apply migrations, create isolated fixtures, and clean up their projects:
+Database integration tests need a **dedicated** database whose name starts with `pebble_test`. They apply migrations, create isolated fixtures, and clean them up. Test files run sequentially because they share migrations and exercise global maintenance jobs; the job suite uses concurrent connections to test overlapping workers. Email HTTP requests are mocked:
 
 ```sh
 TEST_DATABASE_URL=postgresql://localhost:5432/pebble_test pnpm test:integration
