@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowUpRight, LayoutGrid, Globe2, Radio, ArrowLeft } from "lucide-react";
+import { ArrowUpRight, LayoutGrid, Globe2, Radio, ArrowLeft, Settings } from "lucide-react";
 import type { Project } from "@/db/schema";
 import { Brand } from "./brand";
 import { ThemeToggle } from "./theme-provider";
@@ -26,6 +26,8 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const org = organization.slug;
+  const settingsActive =
+    pathname === `/app/${org}/settings` || pathname.startsWith(`/app/${org}/settings/`);
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -53,6 +55,15 @@ export function AppShell({
             <LayoutGrid size={16} />
             All projects<span className="ml-auto text-xs opacity-50">{projects.length}</span>
           </Link>
+          {canManage && (
+            <Link
+              href={`/app/${org}/settings`}
+              className={cn("nav-item", settingsActive && "active")}
+            >
+              <Settings size={16} />
+              Settings
+            </Link>
+          )}
           <div className="mt-9 flex items-center justify-between">
             <div className="nav-label mb-0!">YOUR WEBSITES</div>
             {canManage && <ProjectDialog org={org} compact />}
@@ -114,7 +125,9 @@ export function AppShell({
             <span className="text-foreground">
               {pathname === `/app/${org}`
                 ? "All projects"
-                : (projects.find((p) => pathname.includes(p.id))?.name ?? "Project")}
+                : settingsActive
+                  ? "Settings"
+                  : (projects.find((p) => pathname.includes(p.id))?.name ?? "Project")}
             </span>
           </span>
           <span className="topbar-caption">

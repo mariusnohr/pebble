@@ -7,7 +7,7 @@ export async function recordAudit(
     organizationId: string;
     actor: { id: string; name: string; email: string };
     action: string;
-    targetType: "project" | "ingest_key";
+    targetType: "project" | "ingest_key" | "organization";
     targetId: string;
     details?: Record<string, unknown>;
   },
