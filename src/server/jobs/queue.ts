@@ -5,7 +5,7 @@ import { MAX_ATTEMPTS, retryDelay } from "./retry";
 export const TICK_MS = 30_000;
 export const JOB_LEASE_MS = 120_000;
 const LOCK_NAMESPACE = 0x50454242;
-const kindLocks = { retention: 1, purge: 2, outbox: 3 };
+const kindLocks = { retention: 1, purge: 2, outbox: 3, legacy_projects: 4 };
 export type JobKind = keyof typeof kindLocks;
 export const JOB_KINDS = Object.keys(kindLocks) as JobKind[];
 export type Job = { id: string; kind: JobKind; attempts: number; payload: Record<string, unknown> };
@@ -27,7 +27,9 @@ export function scheduledJobs(now: Date) {
     }
   }
   const runAt = new Date(Math.floor(now.getTime() / TICK_MS) * TICK_MS);
-  schedules.push({ kind: "outbox", uniqueKey: `outbox:${runAt.toISOString()}`, runAt });
+  for (const kind of ["outbox", "legacy_projects"] as const) {
+    schedules.push({ kind, uniqueKey: `${kind}:${runAt.toISOString()}`, runAt });
+  }
   return schedules;
 }
 
