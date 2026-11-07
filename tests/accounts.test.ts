@@ -4,7 +4,7 @@ import { signupAllowed } from "../src/server/signup-gate";
 import { clientAddress } from "../src/server/rate-limit";
 import { renderEmail } from "../src/server/email/templates";
 
-test("the launch gate defaults closed and matches operator addresses case-insensitively", (t) => {
+test("the launch gate defaults closed and matches operator addresses case-insensitively", async (t) => {
   const previous = {
     SIGNUP_OPEN: process.env.SIGNUP_OPEN,
     OPERATOR_EMAILS: process.env.OPERATOR_EMAILS,
@@ -17,11 +17,12 @@ test("the launch gate defaults closed and matches operator addresses case-insens
   });
   process.env.SIGNUP_OPEN = "false";
   process.env.OPERATOR_EMAILS = " One@example.com, TWO@example.com ";
-  assert.equal(signupAllowed("visitor@example.com"), false);
-  assert.equal(signupAllowed("one@EXAMPLE.com"), true);
-  assert.equal(signupAllowed("two@example.com"), true);
+  assert.equal(await signupAllowed("visitor@example.com", async () => false), false);
+  assert.equal(await signupAllowed("one@EXAMPLE.com"), true);
+  assert.equal(await signupAllowed("two@example.com"), true);
+  assert.equal(await signupAllowed("invited@example.com", async () => true), true);
   process.env.SIGNUP_OPEN = "true";
-  assert.equal(signupAllowed("visitor@example.com"), true);
+  assert.equal(await signupAllowed("visitor@example.com", async () => false), true);
 });
 test("trusted proxy uses the final forwarded address, never the spoofable first address", (t) => {
   const previous = process.env.TRUST_PROXY;
@@ -78,4 +79,31 @@ test("auth rejects duplicate cookies before parsing credentials or accessing the
       }
     }
   }
+});
+
+test("invitation links distinguish expiry, single use, revocation and decline", async () => {
+  const { invitationUnavailable } = await import("../src/lib/invitations");
+  const future = new Date(Date.now() + 86400000);
+  assert.equal(invitationUnavailable({ status: "pending", expiresAt: future }), null);
+  assert.equal(
+    invitationUnavailable({ status: "pending", expiresAt: new Date(0) }),
+    "This invitation has expired",
+  );
+  assert.equal(
+    invitationUnavailable({ status: "expired", expiresAt: future }),
+    "This invitation has expired",
+  );
+  assert.equal(
+    invitationUnavailable({ status: "accepted", expiresAt: future }),
+    "This invitation has already been used",
+  );
+  assert.equal(
+    invitationUnavailable({ status: "revoked", expiresAt: future }),
+    "This invitation has been revoked",
+  );
+  assert.equal(
+    invitationUnavailable({ status: "rejected", expiresAt: future }),
+    "This invitation has been declined",
+  );
+  assert.equal(invitationUnavailable(null), "This invitation is no longer available");
 });

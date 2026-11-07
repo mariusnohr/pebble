@@ -113,7 +113,8 @@ export async function handleAuth(request: Request): Promise<Response> {
       return fail(
         "Enter a name (1–80 characters), valid email and password (10–128 characters), and accept the Terms and Privacy Policy.",
       );
-    if (!signupAllowed(parsed.data.email)) return fail("Pebble isn't open for sign-up yet", 403);
+    if (!(await signupAllowed(parsed.data.email)))
+      return fail("Pebble isn't open for sign-up yet", 403);
     body = { ...parsed.data, callbackURL: "/app" };
     if (!(await rateLimit(`signup:${clientAddress(request.headers)}`, 5, 3600)))
       return fail(ATTEMPT_LIMIT_MESSAGE, 429);

@@ -18,6 +18,13 @@ export function SettingsNavigation({ org, canManage }: { org: string; canManage:
           General
         </Link>
       )}
+      <Link
+        href={`${base}/members`}
+        className={cn(pathname === `${base}/members` && "selected")}
+        aria-current={pathname === `${base}/members` ? "page" : undefined}
+      >
+        Members
+      </Link>
     </nav>
   );
 }

@@ -146,7 +146,11 @@ export function ProjectForm({
             {state.success}
           </p>
         )}
-        <Button type="submit" disabled={pending || contextTooLong} className="h-10 px-4">
+        <Button
+          type="submit"
+          disabled={readOnly || pending || contextTooLong}
+          className="h-10 px-4"
+        >
           {pending ? "Saving…" : project ? "Save changes" : "Create project"}
           <ArrowRight size={14} />
         </Button>

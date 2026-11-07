@@ -30,6 +30,7 @@ export default async function SettingsPage({
           org={org}
           firstEventAt={firstEventAt}
           timezone={project.timezone}
+          readOnly={role === "member"}
         />
         <ApiKeys readOnly={role === "member"} org={org} projectId={project.id} keys={keys} />
         <section className="panel settings-panel">
