@@ -2,7 +2,8 @@ import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { LEGACY_ORGANIZATION_ID } from "../../src/server/legacy-organization";
+import { prepareContractDatabase } from "./fixtures/contract-schema";
 import { getDb, closeDb } from "../../src/db";
 import { projects, events, visits, apiKeys, rateLimits } from "../../src/db/schema";
 import { ingest } from "../../src/server/ingestion";
@@ -95,12 +96,12 @@ async function seedRateLimit(key: string, count: number) {
 }
 
 before(async () => {
-  await migrate(getDb(), { migrationsFolder: "drizzle" });
+  await prepareContractDatabase(getDb().$client);
   await getDb()
     .insert(projects)
     .values([
-      { id: a, name: "Integration A", origins: [origin] },
-      { id: b, name: "Integration B", origins: [origin] },
+      { id: a, name: "Integration A", organizationId: LEGACY_ORGANIZATION_ID, origins: [origin] },
+      { id: b, name: "Integration B", organizationId: LEGACY_ORGANIZATION_ID, origins: [origin] },
     ]);
 });
 after(async () => {
@@ -283,12 +284,15 @@ test("HTTP endpoint enforces server key scope, revocation, and browser origin", 
 test("paused and deleted projects stop ingestion; deletion removes dependent data", async () => {
   const [project] = await getDb()
     .insert(projects)
-    .values({ name: "Disposable", origins: [origin] })
+    .values({ name: "Disposable", organizationId: LEGACY_ORGANIZATION_ID, origins: [origin] })
     .returning();
   await ingest(project.id, [message()], "browser", context);
-  await getDb()
-    .insert(apiKeys)
-    .values({ projectId: project.id, name: "Disposable", prefix: "pb_x", tokenHash: randomUUID() });
+  await getDb().insert(apiKeys).values({
+    projectId: project.id,
+    name: "Disposable",
+    prefix: "pb_x",
+    tokenHash: randomUUID(),
+  });
   await getDb().update(projects).set({ paused: true }).where(eq(projects.id, project.id));
   await assert.rejects(ingest(project.id, [message()], "browser", context), /paused/);
   await getDb().delete(projects).where(eq(projects.id, project.id));

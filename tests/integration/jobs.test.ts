@@ -2,7 +2,8 @@ import { before, after, afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { LEGACY_ORGANIZATION_ID } from "../../src/server/legacy-organization";
+import { prepareContractDatabase } from "./fixtures/contract-schema";
 import { getDb, closeDb } from "../../src/db";
 import { emailOutbox } from "../../src/db/schema";
 import { queueEmail } from "../../src/server/email/queue";
@@ -32,8 +33,7 @@ const pool = db.$client;
 const jobIds: string[] = [],
   emailIds: string[] = [],
   projectIds: string[] = [];
-const bucketKeys: string[] = [],
-  sessionKeys: string[] = [];
+const bucketKeys: string[] = [];
 const data = {
   subject: "Test message",
   heading: "Hello",
@@ -49,16 +49,13 @@ const emailEnv = {
 };
 
 before(async () => {
-  await migrate(db, { migrationsFolder: "drizzle" });
+  await prepareContractDatabase(db.$client);
 });
 afterEach(async () => {
   await pool.query("delete from jobs where id = any($1::uuid[])", [jobIds.splice(0)]);
   await pool.query("delete from email_outbox where id = any($1::uuid[])", [emailIds.splice(0)]);
   await pool.query("delete from projects where id = any($1::uuid[])", [projectIds.splice(0)]);
   await pool.query("delete from rate_limits where key = any($1::text[])", [bucketKeys.splice(0)]);
-  await pool.query("delete from admin_sessions where token_hash = any($1::text[])", [
-    sessionKeys.splice(0),
-  ]);
 });
 after(async () => {
   await closeDb();
@@ -373,8 +370,8 @@ test("retention job deletes in batches using each project's cutoff and visits' l
     const project = randomUUID();
     projectIds.push(project);
     await pool.query(
-      "insert into projects (id, name, origins, retention_days) values ($1, 'Retention test', '{}', $2)",
-      [project, retention],
+      "insert into projects (id, name, origins, retention_days, organization_id) values ($1, 'Retention test', '{}', $2, $3)",
+      [project, retention, LEGACY_ORGANIZATION_ID],
     );
     for (const days of [1, 8, 31]) {
       await pool.query(
@@ -416,16 +413,11 @@ test("daily purge removes expired maintenance data but preserves recent and unfi
   for (const old of [true, false]) {
     const key = randomUUID();
     bucketKeys.push(key);
-    sessionKeys.push(key);
     const expiry = new Date(Date.now() + (old ? -1 : 1) * 86_400_000);
     await pool.query("insert into rate_limits (key, count, expires_at) values ($1, 1, $2)", [
       key,
       expiry,
     ]);
-    await pool.query(
-      "insert into admin_sessions (token_hash, password_version, expires_at) values ($1, 'test', $2)",
-      [key, expiry],
-    );
     const jobId = await addJob("retention");
     await pool.query(
       "update jobs set finished_at = now() - ($2 * interval '1 day') where id = $1",
@@ -458,13 +450,5 @@ test("daily purge removes expired maintenance data but preserves recent and unfi
     (await pool.query("select key from rate_limits where key = any($1::text[])", [bucketKeys])).rows
       .length,
     1,
-  );
-  assert.equal(
-    (
-      await pool.query("select token_hash from admin_sessions where token_hash = any($1::text[])", [
-        sessionKeys,
-      ])
-    ).rows.length,
-    2, // Legacy sessions remain untouched until the M2 contract step.
   );
 });

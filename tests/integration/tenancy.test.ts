@@ -2,7 +2,7 @@ import "next/dist/server/node-environment-baseline.js";
 import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { prepareContractDatabase } from "./fixtures/contract-schema";
 import { eq, inArray } from "drizzle-orm";
 import { signJWT } from "better-auth/crypto";
 import { getDb, closeDb } from "../../src/db";
@@ -121,7 +121,7 @@ async function orgFor(userId: string, name = "Test team") {
   orgIds.push(org.id);
   return org;
 }
-async function projectFor(orgId: string | null) {
+async function projectFor(orgId: string) {
   const [project] = await db
     .insert(projects)
     .values({ name: "Test project", organizationId: orgId, origins: ["https://example.com"] })
@@ -130,7 +130,7 @@ async function projectFor(orgId: string | null) {
   return project;
 }
 before(async () => {
-  await migrate(db, { migrationsFolder: "drizzle" });
+  await prepareContractDatabase(db.$client);
 });
 after(async () => {
   if (projectIds.length) await db.delete(projects).where(inArray(projects.id, projectIds));
@@ -218,7 +218,7 @@ test("first verified operator claims Pebble atomically and concurrent claims can
   const [owner] = await db.select().from(user).where(eq(user.id, winner.userId));
   assert.equal(owner.emailVerified, true);
   assert.equal(owner.lastOrganizationId, LEGACY_ORGANIZATION_ID);
-  const legacyProject = await projectFor(null);
+  const legacyProject = await projectFor(LEGACY_ORGANIZATION_ID);
   const winnerIndex = winner.userId === first.id ? 0 : 1;
   const cookie = results[winnerIndex].headers
     .getSetCookie()
