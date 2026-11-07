@@ -46,12 +46,14 @@ export function Installation({
   org,
   firstEventAt,
   timezone,
+  readOnly = false,
 }: {
   projectId: string;
   endpoint: string;
   org: string;
   firstEventAt: string | null;
   timezone: string;
+  readOnly?: boolean;
 }) {
   const [tab, setTab] = useState<"browser" | "server">("browser");
   const [receivedAt, setReceivedAt] = useState(firstEventAt);
@@ -118,7 +120,9 @@ export function Installation({
         <p className="mb-4 text-sm text-muted-foreground">
           {tab === "browser"
             ? "Add this once to your website’s layout. Pageviews and live activity are tracked automatically."
-            : "Install the SDK from this repository’s package archive, then create a server API key below. See the README for package installation."}
+            : readOnly
+              ? "Install the SDK from this repository’s package archive. Ask an owner or admin for a server API key."
+              : "Install the SDK from this repository’s package archive, then create a server API key below. See the README for package installation."}
         </p>
         <div className="code-block">
           <div className="code-toolbar">

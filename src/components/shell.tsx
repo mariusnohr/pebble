@@ -43,6 +43,9 @@ export function AppShell({
                   {item.name}
                 </Link>
               ))}
+              <Link className="block underline" href="/app/invitations">
+                Invitations
+              </Link>
               <Link className="block underline" href="/app/new">
                 Create organization
               </Link>
@@ -55,15 +58,13 @@ export function AppShell({
             <LayoutGrid size={16} />
             All projects<span className="ml-auto text-xs opacity-50">{projects.length}</span>
           </Link>
-          {canManage && (
-            <Link
-              href={`/app/${org}/settings`}
-              className={cn("nav-item", settingsActive && "active")}
-            >
-              <Settings size={16} />
-              Settings
-            </Link>
-          )}
+          <Link
+            href={canManage ? `/app/${org}/settings` : `/app/${org}/settings/members`}
+            className={cn("nav-item", settingsActive && "active")}
+          >
+            <Settings size={16} />
+            Settings
+          </Link>
           <div className="mt-9 flex items-center justify-between">
             <div className="nav-label mb-0!">YOUR WEBSITES</div>
             {canManage && <ProjectDialog org={org} compact />}
