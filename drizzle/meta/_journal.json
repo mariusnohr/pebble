@@ -36,6 +36,13 @@
       "when": 1794091000000,
       "tag": "0004_invitation_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794092645522,
+      "tag": "0005_contract_legacy_admin",
+      "breakpoints": true
     }
   ]
 }

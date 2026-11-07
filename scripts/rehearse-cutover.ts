@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { LEGACY_ORGANIZATION_ID } from "../src/server/legacy-organization";
+import { EXPAND_MIGRATION, migrateThrough } from "./migration-boundary";
 
 export function requireTestDatabaseUrl(value = process.env.TEST_DATABASE_URL) {
   const message =
@@ -58,7 +57,7 @@ export async function rehearseCutover(pool: Pool, log: (line: string) => void = 
     assert.ok(table in before, `Restore the legacy database first: missing ${table}`);
   }
   log("Cutover rehearsal: existing public-table row counts (before -> after)");
-  await migrate(drizzle(pool), { migrationsFolder: "drizzle" });
+  await migrateThrough(pool, EXPAND_MIGRATION);
   const after = await tableCounts(pool);
   for (const [table, count] of Object.entries(before)) {
     log(`${table}: ${count} -> ${after[table] ?? "MISSING"}`);
