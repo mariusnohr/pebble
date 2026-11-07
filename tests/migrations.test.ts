@@ -3,8 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { requireTestDatabaseUrl } from "../scripts/rehearse-cutover";
 
-// Deliberately conservative throughout M1, including newly created tables.
-// Lift this guard only in the M2 contract step, when rollback support ends.
+// Historical M1 migrations must remain additive even after contraction ships.
 function assertAdditiveMigration(source: string) {
   const sql = source
     .replace(/'(?:''|[^'])*'|"(?:""|[^"])*"|--[^\n]*|\/\*[\s\S]*?\*\//g, (token) =>
@@ -34,12 +33,12 @@ function assertAdditiveMigration(source: string) {
   }
 }
 
-test("every migration after 0000 stays additive during the rollback window", () => {
+test("M1 migrations stay additive at the historical rollback boundary", () => {
   const folder = new URL("../drizzle/", import.meta.url);
   for (const file of readdirSync(folder)
     .filter((name) => /^\d+.*\.sql$/.test(name))
     .sort()) {
-    if (file.startsWith("0000_")) continue;
+    if (file.startsWith("0000_") || file > "0004_\uffff") continue;
     assert.doesNotThrow(
       () => assertAdditiveMigration(readFileSync(new URL(file, folder), "utf8")),
       file,

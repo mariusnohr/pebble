@@ -2,14 +2,13 @@ import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { prepareContractDatabase } from "./fixtures/contract-schema";
 import { getDb, closeDb } from "../../src/db";
 import { apiKeys, events, organization, projects, usagePeriods, visits } from "../../src/db/schema";
 import { messageSchema } from "../../src/lib/contracts";
 import { hashToken } from "../../src/server/crypto";
 import { ingest } from "../../src/server/ingestion";
 import { cleanupRetention } from "../../src/server/jobs/cleanup";
-import { LEGACY_ORGANIZATION_ID } from "../../src/server/legacy-organization";
 import { POST as browserPost } from "../../src/app/api/v1/collect/route";
 import { POST as serverPost } from "../../src/app/api/v1/events/route";
 
@@ -35,7 +34,7 @@ const message = () =>
   });
 
 before(async () => {
-  await migrate(getDb(), { migrationsFolder: "drizzle" });
+  await prepareContractDatabase(getDb().$client);
 });
 afterEach(async () => {
   if (projectIds.length)
@@ -62,7 +61,7 @@ async function addOrganization() {
   return org.id;
 }
 
-async function addProject(organizationId: string | null) {
+async function addProject(organizationId: string) {
   const [project] = await getDb()
     .insert(projects)
     .values({
@@ -312,16 +311,6 @@ test("usage uses the UTC receipt month rather than the event timestamp", async (
   await ingest(project, [message()], "server");
   assert.equal(await usage(org, "2026-05"), 1);
   assert.equal(await usage(org, "2026-04"), 1);
-});
-
-test("NULL organization projects count toward the legacy organization", async () => {
-  const project = await addProject(null);
-  const before = await usage(LEGACY_ORGANIZATION_ID);
-  await ingest(project, [message()], "browser", context);
-  await ingest(project, [message()], "server");
-  assert.equal(await usage(LEGACY_ORGANIZATION_ID), before + 2);
-  const [row] = await getDb().select().from(projects).where(eq(projects.id, project));
-  assert.equal(row.organizationId, null);
 });
 
 test("retention cleanup and project deletion never lower recorded usage", async () => {

@@ -1,7 +1,6 @@
 import { config } from "dotenv";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { M1_MIGRATION, migrateThrough, migrateWithConfirmation } from "./migration-boundary";
 
 config({ path: ".env.local", quiet: true });
 config({ quiet: true });
@@ -13,7 +12,11 @@ if (!process.env.DATABASE_URL) {
 } else {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
   try {
-    await migrate(drizzle(pool), { migrationsFolder: "drizzle" });
+    if (process.argv.includes("--through-m1")) {
+      await migrateThrough(pool, M1_MIGRATION);
+    } else {
+      await migrateWithConfirmation(pool, process.env.F3_CONTRACT_CONFIRMATION);
+    }
     console.log("Database migrations are up to date.");
   } finally {
     await pool.end();

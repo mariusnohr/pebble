@@ -22,9 +22,11 @@ export const projects = pgTable(
   "projects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    organizationId: uuid("organization_id").references(() => organization.id, {
-      onDelete: "cascade",
-    }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, {
+        onDelete: "cascade",
+      }),
     agentContext: text("agent_context").notNull().default(""),
     name: text("name").notNull(),
     origins: text("origins").array().notNull(),
@@ -107,12 +109,6 @@ export const apiKeys = pgTable("project_api_keys", {
   createdAt: time("created_at").notNull().defaultNow(),
   lastUsedAt: time("last_used_at"),
   revokedAt: time("revoked_at"),
-});
-
-export const adminSessions = pgTable("admin_sessions", {
-  tokenHash: text("token_hash").primaryKey(),
-  passwordVersion: text("password_version").notNull(),
-  expiresAt: time("expires_at").notNull(),
 });
 
 export const rateLimits = pgTable("rate_limits", {
