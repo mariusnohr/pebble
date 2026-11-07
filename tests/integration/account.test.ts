@@ -7,7 +7,9 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { getDb, closeDb } from "../../src/db";
 import {
   account,
+  apiKeys,
   emailOutbox,
+  events,
   member,
   organization,
   projects,
@@ -15,8 +17,10 @@ import {
   twoFactor,
   user,
   verification,
+  visits,
 } from "../../src/db/schema";
 import { requireTestDatabaseUrl } from "../../scripts/rehearse-cutover";
+import { LEGACY_ORGANIZATION_ID } from "../../src/server/legacy-organization";
 
 process.env.DATABASE_URL = requireTestDatabaseUrl(process.env.TEST_DATABASE_URL);
 process.env.APP_URL = "http://localhost:3000";
@@ -28,7 +32,8 @@ const { createOrganization } = await import("../../src/server/organizations");
 const db = getDb();
 const emails: string[] = [],
   userIds: string[] = [],
-  orgIds: string[] = [];
+  orgIds: string[] = [],
+  projectIds: string[] = [];
 const password = "pebble-account-test-password";
 const replacement = "a-new-pebble-test-password";
 
@@ -69,9 +74,8 @@ class Browser {
     return (await this.request("get-session")).json();
   }
 }
-async function setup() {
+async function setup(email = `security-${randomUUID()}@example.com`) {
   const browser = new Browser();
-  const email = `security-${randomUUID()}@example.com`;
   emails.push(email);
   const signup = await browser.request("sign-up/email", {
     name: "Security test",
@@ -130,6 +134,7 @@ before(async () => {
   await migrate(db, { migrationsFolder: "drizzle" });
 });
 after(async () => {
+  if (projectIds.length) await db.delete(projects).where(inArray(projects.id, projectIds));
   if (orgIds.length) await db.delete(organization).where(inArray(organization.id, orgIds));
   if (userIds.length) {
     await db.delete(verification).where(inArray(verification.value, userIds));
@@ -357,13 +362,42 @@ test("sixth code attempt is refused across both factors and persists despite aut
     );
     assert.equal(result.status, 401);
   }
+  // A second signed challenge must not let the limiter count B while Better
+  // Auth verifies the first cookie, A, whose five-attempt budget is exhausted.
+  const third = new Browser();
+  await third.signIn(actor.email);
+  const name = "better-auth.two_factor";
+  const challengeA = second.cookies.get(name);
+  const challengeB = third.cookies.get(name);
+  assert.ok(challengeA && challengeB);
+  assert.notEqual(challengeA, challengeB);
+  for (const values of [
+    [challengeA, challengeB],
+    [challengeB, challengeA],
+  ]) {
+    for (const path of ["two-factor/verify-totp", "two-factor/verify-backup-code"]) {
+      const response = await handleAuth(
+        new Request(`${process.env.APP_URL}/api/auth/${path}`, {
+          method: "POST",
+          headers: {
+            origin: process.env.APP_URL!,
+            "Content-Type": "application/json",
+            cookie: values.map((value) => `${name}=${value}`).join("; "),
+          },
+          body: JSON.stringify({ code: totp(uri) }),
+        }),
+      );
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, "DUPLICATE_COOKIES");
+      assert.deepEqual(response.headers.getSetCookie(), []);
+    }
+  }
   const limited = await second.request("two-factor/verify-totp", { code: totp(uri) });
   assert.equal(limited.status, 429);
   assert.equal((await limited.json()).message, ATTEMPT_LIMIT_MESSAGE);
   assert.equal(await second.current(), null);
   // A different sign-in challenge has its own budget.
-  const third = new Browser();
-  await third.signIn(actor.email);
+  assert.equal(await third.current(), null);
   assert.equal((await third.request("two-factor/verify-totp", { code: totp(uri) })).status, 200);
 });
 
@@ -429,6 +463,11 @@ test("password reset invalidates a pending second-factor sign-in without disabli
 });
 
 test("deletion is blocked for owners with other members; otherwise cascades sole organizations and projects", async () => {
+  const [legacyProject] = await db
+    .insert(projects)
+    .values({ name: "Legacy project", organizationId: null, origins: ["https://example.com"] })
+    .returning();
+  projectIds.push(legacyProject.id);
   const { browser, actor } = await setup();
   const colleague = await setup();
   const second = new Browser();
@@ -489,6 +528,115 @@ test("deletion is blocked for owners with other members; otherwise cascades sole
   );
   assert.equal(await browser.current(), null);
   assert.equal(await second.current(), null);
+  // Deleting an ordinary organization must not remove Pebble's NULL-owned rows.
+  assert.equal(
+    (await db.select().from(projects).where(eq(projects.id, legacyProject.id))).length,
+    1,
+  );
+});
+
+test("deleting Pebble removes legacy NULL projects and lets its operator sign up and verify again", async (t) => {
+  const [legacy] = await db
+    .select()
+    .from(organization)
+    .where(eq(organization.id, LEGACY_ORGANIZATION_ID));
+  assert.ok(legacy);
+  const previousOperators = process.env.OPERATOR_EMAILS;
+  t.after(async () => {
+    if (previousOperators === undefined) delete process.env.OPERATOR_EMAILS;
+    else process.env.OPERATOR_EMAILS = previousOperators;
+    // Restore the migration fixture for other integration suites only after
+    // asserting that the application itself did not recreate this organization.
+    await db.insert(organization).values(legacy).onConflictDoNothing();
+  });
+  const email = `legacy-operator-${randomUUID()}@example.com`;
+  process.env.OPERATOR_EMAILS = email;
+  const { browser, actor } = await setup(email);
+  const owners = await db
+    .select()
+    .from(member)
+    .where(eq(member.organizationId, LEGACY_ORGANIZATION_ID));
+  assert.equal(owners.length, 1);
+  assert.equal(owners[0].userId, actor.id);
+  assert.equal(owners[0].role, "owner");
+
+  const deletedProjects: string[] = [];
+  for (const organizationId of [null, LEGACY_ORGANIZATION_ID]) {
+    const [project] = await db
+      .insert(projects)
+      .values({ name: "Legacy analytics", organizationId, origins: ["https://example.com"] })
+      .returning();
+    projectIds.push(project.id);
+    deletedProjects.push(project.id);
+    const visitId = randomUUID(),
+      visitorId = randomUUID(),
+      now = new Date();
+    await db
+      .insert(visits)
+      .values({ projectId: project.id, id: visitId, visitorId, startedAt: now, lastSeenAt: now });
+    await db.insert(events).values({
+      projectId: project.id,
+      id: randomUUID(),
+      type: "pageview",
+      source: "browser",
+      occurredAt: now,
+      visitorId,
+      visitId,
+      path: "/",
+    });
+    await db.insert(apiKeys).values({
+      projectId: project.id,
+      name: "Legacy ingest key",
+      prefix: "pb_test",
+      tokenHash: randomBytes(32).toString("hex"),
+    });
+  }
+  const outsider = await setup();
+  const otherOrg = await createOrganization(outsider.actor.id, "Unaffected organization");
+  orgIds.push(otherOrg.id);
+  const [otherProject] = await db
+    .insert(projects)
+    .values({
+      name: "Unaffected project",
+      organizationId: otherOrg.id,
+      origins: ["https://example.com"],
+    })
+    .returning();
+  projectIds.push(otherProject.id);
+
+  assert.equal(
+    (await browser.request("delete-user", { password, confirmation: "DELETE" })).status,
+    200,
+  );
+  for (const [table, condition] of [
+    [user, eq(user.id, actor.id)],
+    [organization, eq(organization.id, LEGACY_ORGANIZATION_ID)],
+    [projects, inArray(projects.id, deletedProjects)],
+    [events, inArray(events.projectId, deletedProjects)],
+    [visits, inArray(visits.projectId, deletedProjects)],
+    [apiKeys, inArray(apiKeys.projectId, deletedProjects)],
+  ] as const)
+    assert.equal((await db.select().from(table).where(condition)).length, 0);
+  assert.equal(
+    (await db.select().from(projects).where(eq(projects.id, otherProject.id))).length,
+    1,
+  );
+  assert.equal(await browser.current(), null);
+
+  const recreated = await setup(email);
+  assert.notEqual(recreated.actor.id, actor.id);
+  const current = await recreated.browser.current();
+  assert.equal(current.user.emailVerified, true);
+  assert.equal(current.user.lastOrganizationId, null);
+  assert.equal(
+    (await db.select().from(member).where(eq(member.userId, recreated.actor.id))).length,
+    0,
+  );
+  assert.equal(
+    (await db.select().from(organization).where(eq(organization.id, LEGACY_ORGANIZATION_ID)))
+      .length,
+    0,
+  );
 });
 
 test("account endpoints reject unauthenticated and cross-origin requests; unrelated auth routes remain closed", async () => {

@@ -1,8 +1,8 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
-import { member, organization, user } from "@/db/schema";
+import { member, organization, projects, user } from "@/db/schema";
 import { LEGACY_ORGANIZATION_ID } from "./legacy-organization";
 import { isOperator } from "./signup-gate";
 
@@ -15,11 +15,14 @@ export async function claimLegacyOrganization(
 ) {
   if (!isOperator(actor.email)) return;
   // Serializes competing operators; called in the verification transaction.
-  await tx
+  const [legacy] = await tx
     .select()
     .from(organization)
     .where(eq(organization.id, LEGACY_ORGANIZATION_ID))
     .for("update");
+  // The sole owner may have deleted Pebble. Verification must still succeed,
+  // without recreating the deleted organization or a dangling membership.
+  if (!legacy) return;
   const [owner] = await tx
     .select()
     .from(member)
@@ -82,7 +85,11 @@ export async function createOrganization(userId: string, name: string) {
 }
 
 // Internal helper for later organization/account deletion flows. Caller authorizes first.
-// M2 adds subscription cancellation here. All dependent data uses FK cascades.
+// M2 adds subscription cancellation here. Dependent project data uses FK cascades.
 export async function deleteOrganization(tx: Transaction, organizationId: string) {
+  // During the rollback window, tenancy treats NULL-owned projects as Pebble's.
+  // They have no organization FK to cascade, so remove them explicitly first.
+  if (organizationId === LEGACY_ORGANIZATION_ID)
+    await tx.delete(projects).where(isNull(projects.organizationId));
   await tx.delete(organization).where(eq(organization.id, organizationId));
 }
