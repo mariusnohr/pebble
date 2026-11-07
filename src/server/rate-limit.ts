@@ -2,7 +2,6 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { rateLimits } from "@/db/schema";
-import { adminPasswordHash } from "./config";
 import { hashToken } from "./crypto";
 
 export async function rateLimit(key: string, limit: number, seconds = 60) {
@@ -10,7 +9,7 @@ export async function rateLimit(key: string, limit: number, seconds = 60) {
   const [row] = await getDb()
     .insert(rateLimits)
     .values({
-      key: hashToken(`${adminPasswordHash() ?? ""}:${key}:${bucket}`),
+      key: hashToken(`${process.env.BETTER_AUTH_SECRET ?? ""}:${key}:${bucket}`),
       count: 1,
       expiresAt: new Date((bucket + 1) * seconds * 1000),
     })
@@ -22,6 +21,6 @@ export async function rateLimit(key: string, limit: number, seconds = 60) {
 // Enable only when the application's trusted reverse proxy overwrites this header.
 export function clientAddress(headers: Headers) {
   return process.env.TRUST_PROXY === "true"
-    ? (headers.get("x-real-ip") ?? "unknown").slice(0, 100)
+    ? (headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || "unknown").slice(0, 100)
     : "direct";
 }

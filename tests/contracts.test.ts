@@ -8,15 +8,8 @@ import {
   propertiesSchema,
   validTimezone,
 } from "../src/lib/contracts";
-import { hashPassword, verifyPassword } from "../src/server/crypto";
 import { readJson } from "../src/server/http";
 
-test("password hashing verifies the password and rejects malformed hashes", async () => {
-  const hash = await hashPassword("correct horse pebble battery");
-  assert.equal(await verifyPassword("correct horse pebble battery", hash), true);
-  assert.equal(await verifyPassword("wrong", hash), false);
-  assert.equal(await verifyPassword("anything", "scrypt$bad$bad"), false);
-});
 test("paths drop query strings and fragments and origins are exact", () => {
   assert.equal(cleanPath("/pricing?email=private@example.com#details"), "/pricing");
   assert.throws(() => cleanPath("//other.example/path"));

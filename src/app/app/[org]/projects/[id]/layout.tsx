@@ -5,12 +5,13 @@ export default async function ProjectLayout({
   params,
 }: {
   children: React.ReactNode;
-  params: Promise<{ id: string }>;
+  params: Promise<{ org: string; id: string }>;
 }) {
-  const project = await getProject((await params).id);
+  const { org, id } = await params;
+  const project = await getProject(org, id);
   return (
     <>
-      <ProjectNavigation project={project} />
+      <ProjectNavigation org={org} project={project} />
       {children}
     </>
   );

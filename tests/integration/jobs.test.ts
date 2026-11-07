@@ -465,6 +465,6 @@ test("daily purge removes expired maintenance data but preserves recent and unfi
         sessionKeys,
       ])
     ).rows.length,
-    1,
+    2, // Legacy sessions remain untouched until the M2 contract step.
   );
 });

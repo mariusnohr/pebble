@@ -3,66 +3,127 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { organization, twoFactor } from "better-auth/plugins";
 import { defaultRoles } from "better-auth/plugins/organization/access";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { queueEmail } from "./email/queue";
+import { claimLegacyOrganization, type Transaction } from "./organizations";
 import * as schema from "../db/schema";
 
-// Schema-generation configuration only during the expand step. No route imports
-// this module; admin-password authentication remains in src/server/auth.ts.
-// Constructing Drizzle's pool does not connect, so the CLI works offline.
-export const authOptions = {
-  database: drizzleAdapter(
-    drizzle({
-      connection: {
-        connectionString: process.env.DATABASE_URL,
-        max: 10,
-        connectionTimeoutMillis: 5000,
-        statement_timeout: 15000,
-      },
-      schema,
-    }),
-    { provider: "pg", schema, transaction: true },
-  ),
-  baseURL: process.env.APP_URL,
-  trustedOrigins: process.env.APP_URL ? [process.env.APP_URL] : [],
-  advanced: { database: { generateId: "uuid" } },
-  emailAndPassword: { enabled: true },
-  session: { expiresIn: 14 * 86400, updateAge: 86400 },
-  rateLimit: { enabled: true, storage: "database" },
-  user: {
-    additionalFields: {
-      lastOrganizationId: {
-        type: "string",
-        required: false,
-        input: false,
-        references: { model: "organization", field: "id", onDelete: "set null" },
+// The route supplies a transaction so account changes, the legacy claim and mail
+// commit together. The standalone instance is also used by the schema CLI/session reads.
+const database = drizzle({
+  connection: {
+    connectionString: process.env.DATABASE_URL,
+    max: 10,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+  },
+  schema,
+});
+export function makeAuthOptions(tx?: Transaction) {
+  const db = tx ?? database;
+  return {
+    database: drizzleAdapter(db, { provider: "pg", schema, transaction: !tx }),
+    secret: process.env.BETTER_AUTH_SECRET,
+    baseURL: process.env.APP_URL,
+    trustedOrigins: process.env.APP_URL ? [process.env.APP_URL] : [],
+    advanced: {
+      database: { generateId: "uuid" },
+      useSecureCookies: process.env.APP_URL?.startsWith("https:") ?? false,
+      defaultCookieAttributes: { httpOnly: true, sameSite: "lax" },
+      ipAddress: { disableIpTracking: true },
+    },
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 10,
+      maxPasswordLength: 128,
+      requireEmailVerification: true,
+      onExistingUserSignUp: async ({ user }) => {
+        const send = (connection: Transaction) =>
+          queueEmail(connection, {
+            to: user.email,
+            template: "signupAttempt",
+            data: {
+              subject: "Someone tried to sign up for Pebble",
+              heading: "Someone tried to sign up",
+              paragraphs: [
+                "Someone used your email address to sign up for Pebble. Your account has not changed. If this was not you, you can ignore this email.",
+              ],
+              links: [],
+            },
+          });
+        if (tx) await send(tx);
+        else await database.transaction(send);
       },
     },
-  },
-  plugins: [
-    organization({
-      roles: defaultRoles,
-      invitationExpiresIn: 7 * 86400,
-      schema: {
-        organization: {
-          additionalFields: {
-            aiEnabled: { type: "boolean", required: true, defaultValue: true, input: false },
-            stripeCustomerId: { type: "string", required: false, input: false },
-            planOverride: { type: ["pro", "business"], required: false, input: false },
-            planOverrideNote: { type: "string", required: false, input: false },
-            suspendedAt: { type: "date", required: false, input: false },
-            suspendReason: { type: "string", required: false, input: false },
-            retentionGraceUntil: { type: "date", required: false, input: false },
-          },
-        },
-        invitation: {
-          additionalFields: {
-            resendCount: { type: "number", required: true, defaultValue: 0, input: false },
-          },
+    emailVerification: {
+      expiresIn: 86400,
+      sendOnSignUp: true,
+      sendOnSignIn: false,
+      autoSignInAfterVerification: true,
+      sendVerificationEmail: async ({ user, token }) => {
+        const send = (connection: Transaction) =>
+          queueEmail(connection, {
+            to: user.email,
+            template: "verifyEmail",
+            data: {
+              subject: "Verify your Pebble email",
+              heading: "Verify your email",
+              paragraphs: [
+                "Confirm your email address to start using Pebble. This link expires in 24 hours.",
+              ],
+              links: [
+                { label: "Verify email", path: `/verify-email?token=${encodeURIComponent(token)}` },
+              ],
+            },
+          });
+        if (tx) await send(tx);
+        else await database.transaction(send);
+      },
+      afterEmailVerification: async (user) => {
+        if (!tx) throw new Error("Verification requires the auth route transaction.");
+        await claimLegacyOrganization(tx, user);
+      },
+    },
+    session: { expiresIn: 14 * 86400, updateAge: 86400 },
+    // Pebble limits requests using the last trusted X-Forwarded-For entry.
+    rateLimit: { enabled: false },
+    user: {
+      additionalFields: {
+        lastOrganizationId: {
+          type: "string",
+          required: false,
+          input: false,
+          references: { model: "organization", field: "id", onDelete: "set null" },
         },
       },
-    }),
-    twoFactor(),
-  ],
-} satisfies BetterAuthOptions;
+    },
+    plugins: [
+      organization({
+        roles: defaultRoles,
+        invitationExpiresIn: 7 * 86400,
+        schema: {
+          organization: {
+            additionalFields: {
+              aiEnabled: { type: "boolean", required: true, defaultValue: true, input: false },
+              stripeCustomerId: { type: "string", required: false, input: false },
+              planOverride: { type: ["pro", "business"], required: false, input: false },
+              planOverrideNote: { type: "string", required: false, input: false },
+              suspendedAt: { type: "date", required: false, input: false },
+              suspendReason: { type: "string", required: false, input: false },
+              retentionGraceUntil: { type: "date", required: false, input: false },
+            },
+          },
+          invitation: {
+            additionalFields: {
+              resendCount: { type: "number", required: true, defaultValue: 0, input: false },
+            },
+          },
+        },
+      }),
+      twoFactor(),
+    ],
+  } satisfies BetterAuthOptions;
+}
 
-// The CLI discovers this named export. Mounting auth.handler is a later task.
+export const authOptions = makeAuthOptions();
+// The CLI discovers this named export.
 export const auth = betterAuth(authOptions);

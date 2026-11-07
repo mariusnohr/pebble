@@ -227,7 +227,7 @@ export function BreakdownCard({
   );
 }
 
-export function InstallationPrompt({ projectId }: { projectId: string }) {
+export function InstallationPrompt({ projectId, org }: { projectId: string; org: string }) {
   return (
     <div className="installation-prompt">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/8 text-primary">
@@ -238,7 +238,7 @@ export function InstallationPrompt({ projectId }: { projectId: string }) {
         <p>Connect a browser tracker or send your first server event.</p>
       </div>
       <Link
-        href={`/projects/${projectId}/settings`}
+        href={`/app/${org}/projects/${projectId}/settings`}
         className="ml-auto flex shrink-0 items-center gap-2 text-xs font-medium text-primary"
       >
         Set up tracking

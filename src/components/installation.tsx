@@ -97,7 +97,17 @@ type Key = {
   lastUsedAt: Date | null;
   revokedAt: Date | null;
 };
-export function ApiKeys({ projectId, keys }: { projectId: string; keys: Key[] }) {
+export function ApiKeys({
+  projectId,
+  keys,
+  org,
+  readOnly = false,
+}: {
+  projectId: string;
+  keys: Key[];
+  org: string;
+  readOnly?: boolean;
+}) {
   const [state, action, pending] = useActionState(createKeyAction, {});
   return (
     <section className="panel settings-panel">
@@ -119,50 +129,58 @@ export function ApiKeys({ projectId, keys }: { projectId: string; keys: Key[] })
                     <div className="mb-1 text-sm font-medium">{key.name}</div>
                     <code className="text-xs text-muted-foreground">{key.prefix}…</code>
                   </div>
-                  <Dialog>
-                    <DialogTrigger
-                      render={
-                        <Button variant="ghost" size="sm" className="text-muted-foreground" />
-                      }
-                    >
-                      Revoke
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Revoke {key.name}?</DialogTitle>
-                        <DialogDescription>
-                          Applications using this key will no longer be able to send events.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <form action={revokeKeyAction}>
-                        <input type="hidden" name="id" value={key.id} />
-                        <input type="hidden" name="projectId" value={projectId} />
-                        <Button type="submit" variant="destructive">
-                          Revoke key
-                        </Button>
-                      </form>
-                    </DialogContent>
-                  </Dialog>
+                  {!readOnly && (
+                    <Dialog>
+                      <DialogTrigger
+                        render={
+                          <Button variant="ghost" size="sm" className="text-muted-foreground" />
+                        }
+                      >
+                        Revoke
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Revoke {key.name}?</DialogTitle>
+                          <DialogDescription>
+                            Applications using this key will no longer be able to send events.
+                          </DialogDescription>
+                        </DialogHeader>
+                        {!readOnly && (
+                          <form action={revokeKeyAction}>
+                            <input type="hidden" name="org" value={org} />
+                            <input type="hidden" name="id" value={key.id} />
+                            <input type="hidden" name="projectId" value={projectId} />
+                            <Button type="submit" variant="destructive">
+                              Revoke key
+                            </Button>
+                          </form>
+                        )}
+                      </DialogContent>
+                    </Dialog>
+                  )}
                 </div>
               ))}
           </div>
         )}
-        <form action={action} className="space-y-3">
-          <input type="hidden" name="projectId" value={projectId} />
-          <Label htmlFor="key-name">New key name</Label>
-          <div className="flex gap-2">
-            <Input
-              id="key-name"
-              name="name"
-              required
-              maxLength={60}
-              placeholder="Production website"
-            />
-            <Button type="submit" variant="outline" disabled={pending}>
-              {pending ? "Creating…" : "Create key"}
-            </Button>
-          </div>
-        </form>
+        {!readOnly && (
+          <form action={action} className="space-y-3">
+            <input type="hidden" name="org" value={org} />
+            <input type="hidden" name="projectId" value={projectId} />
+            <Label htmlFor="key-name">New key name</Label>
+            <div className="flex gap-2">
+              <Input
+                id="key-name"
+                name="name"
+                required
+                maxLength={60}
+                placeholder="Production website"
+              />
+              <Button type="submit" variant="outline" disabled={pending}>
+                {pending ? "Creating…" : "Create key"}
+              </Button>
+            </div>
+          </form>
+        )}
         {state.error && (
           <p role="alert" className="form-error mt-3">
             {state.error}

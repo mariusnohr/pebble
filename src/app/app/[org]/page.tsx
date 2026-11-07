@@ -1,11 +1,14 @@
+import { requireOrganization } from "@/server/tenancy";
 import Link from "next/link";
 import { ArrowUpRight, Globe2, Sprout, Activity, Users, MousePointer2 } from "lucide-react";
 import { listProjects, getPortfolio } from "@/server/queries";
 import { ProjectDialog } from "@/components/project-form";
 import { PebbleMark } from "@/components/brand";
 
-export default async function Home() {
-  const [projects, stats] = await Promise.all([listProjects(), getPortfolio()]);
+export default async function Home({ params }: { params: Promise<{ org: string }> }) {
+  const { org } = await params;
+  const { role } = await requireOrganization(org);
+  const [projects, stats] = await Promise.all([listProjects(org), getPortfolio(org)]);
   const total = stats.reduce(
     (a, b) => ({
       visitors: a.visitors + b.visitors,
@@ -22,7 +25,7 @@ export default async function Home() {
           <h1>Your websites, at a glance.</h1>
           <p>A little perspective on everything you’re building.</p>
         </div>
-        <ProjectDialog />
+        {role !== "member" && <ProjectDialog org={org} />}
       </div>
       <div className="portfolio-stats">
         <div>
@@ -73,7 +76,7 @@ export default async function Home() {
             const stat = stats.find((s) => s.id === project.id)!;
             return (
               <Link
-                href={`/projects/${project.id}`}
+                href={`/app/${org}/projects/${project.id}`}
                 className="project-card group"
                 key={project.id}
               >
@@ -120,7 +123,7 @@ export default async function Home() {
             </span>
             <h3>Room for your next idea.</h3>
             <p>Add another website to your workspace.</p>
-            <ProjectDialog />
+            {role !== "member" && <ProjectDialog org={org} />}
           </div>
         </div>
       ) : (
@@ -132,7 +135,7 @@ export default async function Home() {
             <br />
             and watch the picture come together.
           </p>
-          <ProjectDialog />
+          {role !== "member" && <ProjectDialog org={org} />}
           <div className="empty-steps">
             <span>
               01 <b>Add a website</b>

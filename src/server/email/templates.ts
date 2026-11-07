@@ -18,7 +18,11 @@ const messageData = z.object({
 });
 
 // Foundation only; feature-specific templates belong here as their features arrive.
-export const emailTemplates = { message: messageData };
+export const emailTemplates = {
+  message: messageData,
+  verifyEmail: messageData,
+  signupAttempt: messageData,
+};
 export type EmailTemplate = keyof typeof emailTemplates;
 export type EmailData<T extends EmailTemplate> = z.infer<(typeof emailTemplates)[T]>;
 
