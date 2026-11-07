@@ -6,21 +6,9 @@ import { createOrganizationAction, updateNameAction } from "@/server/actions";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { authRequest } from "@/lib/auth-client";
+import { TwoFactorSignIn } from "./account-security-forms";
 
-async function authRequest(path: string, body?: Record<string, unknown>) {
-  const response = await fetch(
-    `/api/auth/${path}`,
-    body
-      ? {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : { cache: "no-store" },
-  );
-  const data = await response.json();
-  return { response, data };
-}
 export function SessionRefresh() {
   const pathname = usePathname();
   useEffect(() => {
@@ -116,7 +104,9 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [secondFactor, setSecondFactor] = useState(false);
   const [check, setCheck] = useState<{ email: string; signup: boolean } | null>(null);
+  if (secondFactor) return <TwoFactorSignIn onRestart={() => setSecondFactor(false)} />;
   if (check)
     return (
       <div className="space-y-5">
@@ -152,6 +142,7 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
           });
           if (response.ok) {
             if (signup) setCheck({ email, signup: true });
+            else if (data.twoFactorRedirect) setSecondFactor(true);
             else {
               router.replace("/app");
               router.refresh();
@@ -188,6 +179,11 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
         />
         {signup && <p className="field-hint">10–128 characters</p>}
       </div>
+      {!signup && (
+        <Link href="/forgot-password" className="text-sm underline">
+          Forgot password?
+        </Link>
+      )}
       {signup && (
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" name="terms" required className="mt-1" />
