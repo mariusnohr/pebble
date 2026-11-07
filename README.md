@@ -187,6 +187,26 @@ Server timestamps may be up to 7 days old or 5 minutes ahead. Browser events use
 
 Success is returned only after the database transaction commits: `{ accepted, duplicates, ignored }`. Malformed payloads are rejected as a whole. The browser origin allowlist prevents accidental misuse, but public browser telemetry can be spoofed. Server keys provide authenticated ingestion. Basic known-crawler filtering is heuristic.
 
+Errors return `{ "error": "Human-readable message.", "code": "stable_machine_code" }`:
+
+| Status | Code                | Meaning                                                                      |
+| ------ | ------------------- | ---------------------------------------------------------------------------- |
+| 400    | `invalid_payload`   | Missing or malformed JSON, invalid messages, timestamps or visitor identity. |
+| 413    | `payload_too_large` | Request body exceeds 32 KiB.                                                 |
+| 401    | `unauthorized`      | Missing, invalid or revoked server ingest key.                               |
+| 403    | `unauthorized`      | A supplied project ID conflicts with the server key's project.               |
+| 403    | `forbidden_origin`  | Browser origin is missing, `null` or not in the project's allowlist.         |
+| 404    | `project_not_found` | Project does not exist.                                                      |
+| 403    | `project_paused`    | Project collection is paused.                                                |
+| 429    | `rate_limited`      | Request rate limit exceeded; `Retry-After: 60` indicates when to retry.      |
+| 503    | `unavailable`       | Collection is temporarily unavailable.                                       |
+
+`/api/v1/collect` permits **600 requests per minute per client IP** and **6,000 per minute per project**. With `TRUST_PROXY=true`, `clientAddress()` uses the last `X-Forwarded-For` entry supplied by the trusted proxy; otherwise clients share one IP bucket. `/api/v1/events` permits **6,000 requests per minute per ingest key**; keys belonging to the same project have independent limits. Limits use fixed one-minute windows. Both SDKs stop retries on all 4xx responses, including 429.
+
+Rate limits precede payload validation and project checks. Browser requests consume the IP limit before the body is read, and the project limit as soon as a valid project ID can be extracted from JSON. Server requests first authenticate the key to identify its bucket. After payload validation, collection checks that the project exists, the browser origin is allowed, and the project is not paused, in that order. A refused batch stores no events, visits or usage.
+
+Monthly organization usage increases by newly stored pageviews and custom events from both endpoints, in the same transaction as the batch. Heartbeats still contribute to the response's `accepted` count but never to usage; duplicates and ignored crawlers also do not count. Usage belongs to the UTC calendar month (`YYYY-MM`) when the batch is received, including backdated server events. It is never recomputed or decreased by project deletion or retention cleanup. Projects with no organization yet count toward the legacy Pebble organization. Usage recording starts with this release; quotas and suspension checks are not yet enforced.
+
 Keep custom properties free of personal information. Pebble does not capture form contents, full user agents, or raw IPs. It does not yet implement country lookup, session replay, funnels, bounce rate, or engagement duration.
 
 ## Reports and presence

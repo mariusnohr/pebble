@@ -30,6 +30,11 @@ export async function requireOrganization(slug: string) {
   const actor = await requireMemberUser();
   return { ...(await resolveOrganization(slug, actor)), actor };
 }
+export async function requireOrganizationSettings(slug: string) {
+  const access = await requireOrganization(slug);
+  if (access.role !== "owner" && access.role !== "admin") notFound();
+  return access;
+}
 export function assertOrganizationAdmin(role: string) {
   if (role !== "owner" && role !== "admin")
     throw new Error("Only owners and admins can change projects and ingest keys.");
@@ -86,6 +91,6 @@ export async function listOrganizations(userId: string) {
     .innerJoin(member, and(eq(member.organizationId, organization.id), eq(member.userId, userId)))
     .orderBy(organization.createdAt);
 }
-export async function rememberOrganization(userId: string, organizationId: string) {
+export async function rememberOrganization(userId: string, organizationId: string | null) {
   await getDb().update(user).set({ lastOrganizationId: organizationId }).where(eq(user.id, userId));
 }
