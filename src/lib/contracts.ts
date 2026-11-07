@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeLineEndings } from "./utils";
 
 export const propertiesSchema = z
   .record(
@@ -99,4 +100,13 @@ export const projectSchema = z.object({
   origins: z.string().min(1).max(4096),
   timezone: z.string().refine(validTimezone, "Use a valid IANA timezone, e.g. Europe/Oslo"),
   retentionDays: z.coerce.number().int().min(7).max(730),
+  agentContext: z
+    .string()
+    // Multipart forms use CRLF; match the textarea's LF value before counting and saving.
+    .transform(normalizeLineEndings)
+    .refine(
+      (value) => Array.from(value).length <= 4000,
+      "Agent context must be at most 4,000 characters.",
+    )
+    .default(""),
 });

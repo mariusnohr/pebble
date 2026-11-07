@@ -1,7 +1,10 @@
 "use client";
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Check, Copy, KeyRound } from "lucide-react";
 import { createKeyAction, revokeKeyAction } from "@/server/actions";
+import { pollFirstEvent } from "@/lib/first-event-polling";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -37,20 +40,67 @@ export function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function Installation({ projectId, endpoint }: { projectId: string; endpoint: string }) {
+export function Installation({
+  projectId,
+  endpoint,
+  org,
+  firstEventAt,
+  timezone,
+}: {
+  projectId: string;
+  endpoint: string;
+  org: string;
+  firstEventAt: string | null;
+  timezone: string;
+}) {
   const [tab, setTab] = useState<"browser" | "server">("browser");
+  const [receivedAt, setReceivedAt] = useState(firstEventAt);
+  const eventTime = firstEventAt ?? receivedAt;
+  const router = useRouter();
+  useEffect(() => {
+    if (eventTime) return;
+    return pollFirstEvent(projectId, (time) => {
+      setReceivedAt(time);
+      router.refresh();
+    });
+  }, [projectId, eventTime, router]);
   const snippet = `<script>\n  window.pebble = window.pebble || { q: [] };\n  window.pebble.track = function (...args) {\n    window.pebble.q.push(["track", ...args]);\n  };\n</script>\n<script defer\n  src="${endpoint}/tracker.v1.js"\n  data-project="${projectId}">\n</script>`;
   const server = `import { createClient } from "@pebble/analytics/server";\n\nconst pebble = createClient({\n  endpoint: "${endpoint}",\n  apiKey: process.env.PEBBLE_API_KEY,\n});\n\n// After your operation succeeds:\nconst result = await pebble.track("signup_completed", {\n  source: "newsletter",\n});`;
   const code = tab === "browser" ? snippet : server;
   return (
-    <section className="panel settings-panel">
+    <section id="connect" className="panel settings-panel scroll-mt-6">
       <div className="panel-heading">
         <div>
-          <h2>Connect your website</h2>
+          <h2>Connect</h2>
           <p>A small addition. A whole new perspective.</p>
         </div>
       </div>
       <div className="px-6 pb-6">
+        <div role="status" className="mb-6 rounded-lg border bg-muted/30 p-4 text-sm">
+          {eventTime ? (
+            <>
+              <p className="font-medium text-primary">First event received</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                <time dateTime={eventTime}>
+                  {new Intl.DateTimeFormat("en-GB", {
+                    dateStyle: "medium",
+                    timeStyle: "medium",
+                    timeZone: timezone,
+                  }).format(new Date(eventTime))}
+                </time>{" "}
+                ({timezone})
+              </p>
+              <Link
+                href={`/app/${org}/projects/${projectId}`}
+                className="mt-3 inline-block underline underline-offset-4"
+              >
+                Go to Overview
+              </Link>
+            </>
+          ) : (
+            "Waiting for the first event…"
+          )}
+        </div>
         <div className="mb-4 flex gap-2" role="group" aria-label="Tracking installation">
           <Button
             variant={tab === "browser" ? "secondary" : "ghost"}
@@ -113,7 +163,7 @@ export function ApiKeys({
     <section className="panel settings-panel">
       <div className="panel-heading">
         <div>
-          <h2>Server API keys</h2>
+          <h2>Ingest keys</h2>
           <p>Write-only access, scoped to this project.</p>
         </div>
         <KeyRound size={17} className="text-muted-foreground" />
