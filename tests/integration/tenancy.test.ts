@@ -379,16 +379,21 @@ test("first-event status follows accepted pageviews and agent context saves atom
   assert.equal((await send(values.origins, "pageview")).status, 200);
   assert.deepEqual(await (await status()).json(), received);
 
-  const agentContext = "🙂".repeat(4000);
-  const saved = await asUser(cookie, () =>
-    actions.saveProjectAction({}, form({ ...values, id, agentContext })),
+  const multipartForm = (agentContext: string) =>
+    new Request(`${process.env.APP_URL}/app/${org.slug}/projects/${id}/settings`, {
+      method: "POST",
+      body: form({ ...values, id, agentContext }),
+    }).formData();
+  const agentContext = "🙂".repeat(3998) + "\nb";
+  const saved = await asUser(cookie, async () =>
+    actions.saveProjectAction({}, await multipartForm(agentContext)),
   );
   assert.equal(saved.success, "Project updated.");
   assert.equal((await asUser(cookie, () => getProject(org.slug, id))).agentContext, agentContext);
   const audits = () => db.select().from(auditLog).where(eq(auditLog.organizationId, org.id));
   assert.equal((await audits()).filter((entry) => entry.action === "project.updated").length, 1);
-  const rejected = await asUser(cookie, () =>
-    actions.saveProjectAction({}, form({ ...values, id, agentContext: agentContext + "a" })),
+  const rejected = await asUser(cookie, async () =>
+    actions.saveProjectAction({}, await multipartForm(agentContext + "a")),
   );
   assert.equal(rejected.error, "Agent context must be at most 4,000 characters.");
   assert.equal((await asUser(cookie, () => getProject(org.slug, id))).agentContext, agentContext);

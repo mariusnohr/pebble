@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Plus, ArrowRight } from "lucide-react";
 import { saveProjectAction, deleteProjectAction } from "@/server/actions";
 import type { Project } from "@/db/schema";
+import { normalizeLineEndings } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -28,7 +29,9 @@ export function ProjectForm({
   onCreated?: (id: string) => void;
 }) {
   const [state, action, pending] = useActionState(saveProjectAction, {});
-  const [agentContext, setAgentContext] = useState(project?.agentContext ?? "");
+  const [agentContext, setAgentContext] = useState(() =>
+    normalizeLineEndings(project?.agentContext ?? ""),
+  );
   const contextLength = Array.from(agentContext).length;
   const contextTooLong = contextLength > 4000;
   useEffect(() => {
@@ -100,7 +103,7 @@ export function ProjectForm({
               id="project-agent-context"
               name="agentContext"
               value={agentContext}
-              onChange={(event) => setAgentContext(event.target.value)}
+              onChange={(event) => setAgentContext(normalizeLineEndings(event.target.value))}
               rows={4}
               className="text-input resize-y"
               aria-invalid={contextTooLong}

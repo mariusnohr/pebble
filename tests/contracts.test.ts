@@ -31,6 +31,35 @@ test("agent context accepts 4,000 Unicode characters and rejects 4,001 without t
   }
 });
 
+test("multipart agent context counts normalized newlines at the 4,000-character boundary", async () => {
+  const submitted = async (agentContext: string) => {
+    const form = new FormData();
+    form.set("name", "Test");
+    form.set("origins", "https://example.test");
+    form.set("timezone", "UTC");
+    form.set("retentionDays", "90");
+    form.set("agentContext", agentContext);
+    const request = new Request("https://pebble.test/settings", { method: "POST", body: form });
+    return Object.fromEntries(await request.formData());
+  };
+  for (const character of ["a", "🙂"]) {
+    for (const newline of ["\n", "\r\n", "\r"]) {
+      const value = character.repeat(3998) + newline + "b";
+      const expected = character.repeat(3998) + "\nb";
+      const input = await submitted(value);
+      assert.equal(input.agentContext, character.repeat(3998) + "\r\nb");
+      assert.equal(projectSchema.parse(input).agentContext, expected);
+      const invalid = projectSchema.safeParse(await submitted(value + "c"));
+      assert.equal(invalid.success, false);
+      if (!invalid.success)
+        assert.equal(
+          invalid.error.issues[0].message,
+          "Agent context must be at most 4,000 characters.",
+        );
+    }
+  }
+});
+
 test("paths drop query strings and fragments and origins are exact", () => {
   assert.equal(cleanPath("/pricing?email=private@example.com#details"), "/pricing");
   assert.throws(() => cleanPath("//other.example/path"));
