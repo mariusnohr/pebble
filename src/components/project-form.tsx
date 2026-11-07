@@ -28,6 +28,9 @@ export function ProjectForm({
   onCreated?: (id: string) => void;
 }) {
   const [state, action, pending] = useActionState(saveProjectAction, {});
+  const [agentContext, setAgentContext] = useState(project?.agentContext ?? "");
+  const contextLength = Array.from(agentContext).length;
+  const contextTooLong = contextLength > 4000;
   useEffect(() => {
     if (!project && state.projectId) onCreated?.(state.projectId);
   }, [state.projectId, project, onCreated]);
@@ -91,6 +94,35 @@ export function ProjectForm({
           </div>
         </div>
         {project && (
+          <div className="field">
+            <Label htmlFor="project-agent-context">Agent context</Label>
+            <textarea
+              id="project-agent-context"
+              name="agentContext"
+              value={agentContext}
+              onChange={(event) => setAgentContext(event.target.value)}
+              rows={4}
+              className="text-input resize-y"
+              aria-invalid={contextTooLong}
+              aria-describedby="agent-context-example agent-context-count agent-context-error"
+            />
+            <p id="agent-context-example" className="field-hint">
+              Example: signup_completed fires when a trial starts; /pricing is our main funnel
+              entry.
+            </p>
+            <p id="agent-context-count" className="field-hint">
+              {contextLength.toLocaleString("en")} / 4,000 characters
+            </p>
+            <p
+              id="agent-context-error"
+              role={contextTooLong ? "alert" : undefined}
+              className="form-error"
+            >
+              {contextTooLong ? "Agent context must be at most 4,000 characters." : ""}
+            </p>
+          </div>
+        )}
+        {project && (
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -111,7 +143,7 @@ export function ProjectForm({
             {state.success}
           </p>
         )}
-        <Button type="submit" disabled={pending} className="h-10 px-4">
+        <Button type="submit" disabled={pending || contextTooLong} className="h-10 px-4">
           {pending ? "Saving…" : project ? "Save changes" : "Create project"}
           <ArrowRight size={14} />
         </Button>
@@ -147,7 +179,7 @@ export function ProjectDialog({ org, compact = false }: { org: string; compact?:
           org={org}
           onCreated={(id) => {
             setOpen(false);
-            router.push(`/app/${org}/projects/${id}/settings`);
+            router.push(`/app/${org}/projects/${id}/settings#connect`);
             router.refresh();
           }}
         />

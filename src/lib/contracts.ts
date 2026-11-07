@@ -99,4 +99,11 @@ export const projectSchema = z.object({
   origins: z.string().min(1).max(4096),
   timezone: z.string().refine(validTimezone, "Use a valid IANA timezone, e.g. Europe/Oslo"),
   retentionDays: z.coerce.number().int().min(7).max(730),
+  agentContext: z
+    .string()
+    .refine(
+      (value) => Array.from(value).length <= 4000,
+      "Agent context must be at most 4,000 characters.",
+    )
+    .default(""),
 });

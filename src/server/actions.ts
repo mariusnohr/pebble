@@ -54,11 +54,12 @@ export async function saveProjectAction(_: ActionState, form: FormData): Promise
     ? await requireProject(slug, String(form.get("id")))
     : { ...(await requireOrganization(slug)), project: undefined };
   assertOrganizationAdmin(access.role);
-  const parsed = projectSchema.safeParse(
-    Object.fromEntries(
+  const parsed = projectSchema.safeParse({
+    ...Object.fromEntries(
       ["name", "origins", "timezone", "retentionDays"].map((key) => [key, form.get(key)]),
     ),
-  );
+    agentContext: form.get("agentContext") ?? access.project?.agentContext ?? "",
+  });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
   let origins: string[];
   try {
@@ -66,10 +67,17 @@ export async function saveProjectAction(_: ActionState, form: FormData): Promise
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Invalid origins." };
   }
-  const { name, timezone, retentionDays } = parsed.data;
+  const { name, timezone, retentionDays, agentContext } = parsed.data;
   const id = form.get("id");
   if (id && !z.uuid().safeParse(id).success) return { error: "Invalid project." };
-  const data = { name, origins, timezone, retentionDays, paused: form.get("paused") === "on" };
+  const data = {
+    name,
+    origins,
+    timezone,
+    retentionDays,
+    agentContext,
+    paused: form.get("paused") === "on",
+  };
   const project = await getDb().transaction(async (tx) => {
     const [previous] = id
       ? await tx

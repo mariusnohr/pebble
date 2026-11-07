@@ -1,7 +1,7 @@
 import "server-only";
-import { desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { apiKeys, type Project } from "@/db/schema";
+import { apiKeys, events, type Project } from "@/db/schema";
 import { requireOrganization, requireProject, organizationProjects } from "./tenancy";
 import { LEGACY_ORGANIZATION_ID } from "./legacy-organization";
 
@@ -10,6 +10,16 @@ export async function listProjects(slug: string) {
 }
 export async function getProject(slug: string, id: string) {
   return (await requireProject(slug, id)).project;
+}
+export async function getFirstEvent(slug: string, projectId: string) {
+  await requireProject(slug, projectId);
+  const [event] = await getDb()
+    .select({ receivedAt: events.receivedAt })
+    .from(events)
+    .where(eq(events.projectId, projectId))
+    .orderBy(asc(events.receivedAt))
+    .limit(1);
+  return event?.receivedAt.toISOString() ?? null;
 }
 export async function listKeys(slug: string, projectId: string) {
   await requireProject(slug, projectId);
