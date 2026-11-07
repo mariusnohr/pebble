@@ -25,7 +25,17 @@ export function SessionRefresh() {
   const pathname = usePathname();
   useEffect(() => {
     // Route response applies Better Auth's rolling Set-Cookie (RSCs cannot).
-    void authRequest("get-session").catch(() => {});
+    // Keep active long-lived realtime tabs rolling as well as page navigations.
+    const refresh = () => {
+      if (document.visibilityState === "visible") void authRequest("get-session").catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 60 * 60 * 1000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [pathname]);
   return null;
 }

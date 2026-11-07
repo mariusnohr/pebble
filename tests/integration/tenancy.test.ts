@@ -395,3 +395,94 @@ test("sign-out invalidates the session and maintenance purges expired account ro
   );
   assert.equal((await db.select().from(auditLog).where(eq(auditLog.id, audit.id))).length, 0);
 });
+
+test("successful project and ingest-key mutations record the actor and preserve the deletion audit", async () => {
+  const { actor, cookie } = await verified();
+  const org = await orgFor(actor.id);
+  const values = {
+    org: org.slug,
+    name: "Audited",
+    origins: "https://example.com",
+    timezone: "UTC",
+    retentionDays: "90",
+  };
+  const created = await asUser(cookie, () => actions.saveProjectAction({}, form(values)));
+  assert.ok(created.projectId);
+  const id = created.projectId;
+  projectIds.push(id);
+  await asUser(cookie, () => actions.saveProjectAction({}, form({ ...values, id, paused: "on" })));
+  await asUser(cookie, () => actions.saveProjectAction({}, form({ ...values, id })));
+  await asUser(cookie, () =>
+    actions.createKeyAction({}, form({ org: org.slug, projectId: id, name: "Audited key" })),
+  );
+  const [key] = await db.select().from(apiKeys).where(eq(apiKeys.projectId, id));
+  await asUser(cookie, () =>
+    actions.revokeKeyAction(form({ org: org.slug, projectId: id, id: key.id })),
+  );
+  await assert.rejects(
+    asUser(cookie, () =>
+      actions.deleteProjectAction({}, form({ org: org.slug, id, confirmation: values.name })),
+    ),
+    (error: unknown) =>
+      error instanceof Error &&
+      "digest" in error &&
+      String(error.digest).startsWith("NEXT_REDIRECT;"),
+  );
+  const entries = await db.select().from(auditLog).where(eq(auditLog.organizationId, org.id));
+  for (const action of [
+    "project.created",
+    "project.updated",
+    "project.paused",
+    "project.resumed",
+    "project.deleted",
+    "ingest_key.created",
+    "ingest_key.revoked",
+  ]) {
+    assert.ok(
+      entries.some((entry) => entry.action === action),
+      action,
+    );
+  }
+  assert.ok(
+    entries.every(
+      (entry) =>
+        entry.actorUserId === actor.id &&
+        entry.actorLabel.includes(actor.name) &&
+        entry.actorLabel.includes(actor.email),
+    ),
+  );
+  assert.equal((await db.select().from(apiKeys).where(eq(apiKeys.id, key.id))).length, 0);
+});
+
+test("sixth signup from one final forwarded address is refused and unmounted plugin routes cannot bypass policy", async () => {
+  const ip = randomUUID();
+  for (let i = 0; i < 5; i++) {
+    const email = `limited-${randomUUID()}@example.com`;
+    emails.push(email);
+    assert.equal(
+      (
+        await request(
+          "sign-up/email",
+          { email, password, name: "Limited", termsAccepted: true },
+          ip,
+        )
+      ).status,
+      200,
+    );
+    const [actor] = await db.select().from(user).where(eq(user.email, email));
+    userIds.push(actor.id);
+  }
+  const denied = `limited-${randomUUID()}@example.com`;
+  assert.equal(
+    (
+      await request(
+        "sign-up/email",
+        { email: denied, password, name: "Limited", termsAccepted: true },
+        ip,
+      )
+    ).status,
+    429,
+  );
+  assert.equal((await db.select().from(user).where(eq(user.email, denied))).length, 0);
+  assert.equal((await request("organization/create", { name: "Bypass", slug: "new" })).status, 404);
+});
