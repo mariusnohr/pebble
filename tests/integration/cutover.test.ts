@@ -4,10 +4,13 @@ import { after, before, test } from "node:test";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { EXPAND_MIGRATION, migrateThrough } from "../../scripts/migration-boundary";
 import { Pool } from "pg";
 import * as legacy from "./fixtures/legacy-schema";
-import { organization, projects, usagePeriods, auditLog } from "../../src/db/schema";
+import { organization, projects, usagePeriods, auditLog, user, member } from "../../src/db/schema";
+import { getDb, closeDb } from "../../src/db";
+import { messageSchema } from "../../src/lib/contracts";
+import { ingest } from "../../src/server/ingestion";
 import {
   assertTestDatabase,
   requireTestDatabaseUrl,
@@ -18,6 +21,9 @@ import { backfillLegacyProjects } from "../../src/server/jobs/legacy-projects";
 import { enqueueSchedules, runNextJob, TICK_MS } from "../../src/server/jobs/queue";
 
 const pool = new Pool({ connectionString: requireTestDatabaseUrl(), max: 3 });
+process.env.DATABASE_URL = requireTestDatabaseUrl();
+process.env.APP_URL = "http://localhost:3000";
+process.env.BETTER_AUTH_SECRET = randomUUID();
 const oldDb = drizzle(pool, { schema: legacy });
 const db = drizzle(pool);
 const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
@@ -149,7 +155,7 @@ before(async () => {
 });
 
 after(async () => {
-  // Leave the schema migrated for subsequent files, but remove this file's data.
+  // Leave the schema at the expand boundary; subsequent suites prepare contraction.
   try {
     if (!resetStarted) return;
     await pool.query("delete from projects");
@@ -159,12 +165,13 @@ after(async () => {
     await pool.query("delete from organization where id <> $1", [LEGACY_ORGANIZATION_ID]);
   } finally {
     await pool.end();
+    await closeDb();
   }
 });
 
 test("expand preserves the legacy release, rehearsal counts and rollback writes", async (t) => {
   await t.test(
-    "rehearsal applies all remaining migrations and preserves every legacy value",
+    "rehearsal applies only through the expand boundary and preserves every legacy value",
     async () => {
       const lines: string[] = [];
       const result = await rehearseCutover(pool, (line) => lines.push(line));
@@ -203,7 +210,7 @@ test("expand preserves the legacy release, rehearsal counts and rollback writes"
       );
       assert.deepEqual(await db.select().from(auditLog), []);
       assert.deepEqual(await db.select().from(usagePeriods), []);
-      await migrate(db, { migrationsFolder: "drizzle" });
+      await migrateThrough(pool, EXPAND_MIGRATION);
       // Replay just the migration's data step, independently of journal skipping.
       const expand = migrations[2].sql;
       const dataStep = expand.findIndex((statement) =>
@@ -369,4 +376,93 @@ test("expand preserves the legacy release, rehearsal counts and rollback writes"
         .where(eq(projects.id, projectIds[0])),
     );
   });
+
+  await t.test(
+    "M1 NULL-project reads, usage and deletion remain covered at the expand boundary",
+    async () => {
+      const [legacyOrg] = await db
+        .select()
+        .from(organization)
+        .where(eq(organization.id, LEGACY_ORGANIZATION_ID));
+      const [actor] = await db
+        .insert(user)
+        .values({
+          name: "Expand owner",
+          email: `expand-${randomUUID()}@example.com`,
+          emailVerified: true,
+        })
+        .returning();
+      try {
+        await db.insert(member).values({
+          organizationId: LEGACY_ORGANIZATION_ID,
+          userId: actor.id,
+          role: "owner",
+          createdAt: new Date(),
+        });
+        const [project] = await oldDb
+          .insert(legacy.projects)
+          .values({ name: "Late rollback write", origins: [origin] })
+          .returning();
+        const period = new Date().toISOString().slice(0, 7);
+        const [before] = await db
+          .select()
+          .from(usagePeriods)
+          .where(
+            and(
+              eq(usagePeriods.organizationId, LEGACY_ORGANIZATION_ID),
+              eq(usagePeriods.period, period),
+            ),
+          );
+        const message = () =>
+          messageSchema.parse({
+            id: randomUUID(),
+            type: "pageview",
+            path: "/legacy",
+            visitorId: randomUUID(),
+            visitId: randomUUID(),
+          });
+        await ingest(project.id, [message()], "browser", {
+          origin,
+          userAgent: "Mozilla/5.0 Chrome/130.0.0.0",
+        });
+        await ingest(project.id, [message()], "server");
+        const [usage] = await db
+          .select()
+          .from(usagePeriods)
+          .where(
+            and(
+              eq(usagePeriods.organizationId, LEGACY_ORGANIZATION_ID),
+              eq(usagePeriods.period, period),
+            ),
+          );
+        assert.equal(usage.events, (before?.events ?? 0) + 2);
+        const { resolveProject } = await import("../../src/server/tenancy");
+        assert.equal(
+          (await resolveProject(legacyOrg.slug, project.id, actor)).project.organizationId,
+          null,
+        );
+        const { deleteOrganization } = await import("../../src/server/organizations");
+        const other = await db.select().from(projects).where(eq(projects.name, "Explicit tenant"));
+        await getDb().transaction((tx) => deleteOrganization(tx, LEGACY_ORGANIZATION_ID));
+        assert.equal(
+          (await db.select().from(projects).where(eq(projects.id, project.id))).length,
+          0,
+        );
+        assert.equal(
+          (await db.select().from(legacy.events).where(eq(legacy.events.projectId, project.id)))
+            .length,
+          0,
+        );
+        assert.equal(
+          (await db.select().from(legacy.visits).where(eq(legacy.visits.projectId, project.id)))
+            .length,
+          0,
+        );
+        assert.deepEqual(await db.select().from(projects), other);
+      } finally {
+        await db.delete(user).where(eq(user.id, actor.id));
+        await db.insert(organization).values(legacyOrg).onConflictDoNothing();
+      }
+    },
+  );
 });

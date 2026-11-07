@@ -3,7 +3,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { prepareContractDatabase } from "./fixtures/contract-schema";
 import { getDb, closeDb } from "../../src/db";
 import {
   account,
@@ -131,7 +131,7 @@ async function enable(browser: Browser) {
 }
 
 before(async () => {
-  await migrate(db, { migrationsFolder: "drizzle" });
+  await prepareContractDatabase(db.$client);
 });
 after(async () => {
   if (projectIds.length) await db.delete(projects).where(inArray(projects.id, projectIds));
@@ -465,7 +465,11 @@ test("password reset invalidates a pending second-factor sign-in without disabli
 test("deletion is blocked for owners with other members; otherwise cascades sole organizations and projects", async () => {
   const [legacyProject] = await db
     .insert(projects)
-    .values({ name: "Legacy project", organizationId: null, origins: ["https://example.com"] })
+    .values({
+      name: "Legacy project",
+      organizationId: LEGACY_ORGANIZATION_ID,
+      origins: ["https://example.com"],
+    })
     .returning();
   projectIds.push(legacyProject.id);
   const { browser, actor } = await setup();
@@ -528,14 +532,14 @@ test("deletion is blocked for owners with other members; otherwise cascades sole
   );
   assert.equal(await browser.current(), null);
   assert.equal(await second.current(), null);
-  // Deleting an ordinary organization must not remove Pebble's NULL-owned rows.
+  // Deleting an ordinary organization must not remove Pebble's projects.
   assert.equal(
     (await db.select().from(projects).where(eq(projects.id, legacyProject.id))).length,
     1,
   );
 });
 
-test("deleting Pebble removes legacy NULL projects and lets its operator sign up and verify again", async (t) => {
+test("deleting Pebble removes its projects and lets its operator sign up and verify again", async (t) => {
   const [legacy] = await db
     .select()
     .from(organization)
@@ -561,10 +565,10 @@ test("deleting Pebble removes legacy NULL projects and lets its operator sign up
   assert.equal(owners[0].role, "owner");
 
   const deletedProjects: string[] = [];
-  for (const organizationId of [null, LEGACY_ORGANIZATION_ID]) {
+  for (const name of ["Legacy analytics one", "Legacy analytics two"]) {
     const [project] = await db
       .insert(projects)
-      .values({ name: "Legacy analytics", organizationId, origins: ["https://example.com"] })
+      .values({ name, organizationId: LEGACY_ORGANIZATION_ID, origins: ["https://example.com"] })
       .returning();
     projectIds.push(project.id);
     deletedProjects.push(project.id);
