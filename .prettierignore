@@ -1,4 +1,5 @@
 node_modules
+.nohr
 .next
 coverage
 packages/analytics/dist
