@@ -19,7 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "db:rehearse": "tsx scripts/rehearse-cutover.ts"
+    "db:rehearse": "node --import tsx scripts/rehearse-cutover.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

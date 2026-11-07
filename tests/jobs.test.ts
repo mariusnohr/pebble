@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Pool } from "pg";
-import { scheduledJobs } from "../src/server/jobs/queue";
+import { JOB_KINDS, scheduledJobs, TICK_MS } from "../src/server/jobs/queue";
 import { renderEmail } from "../src/server/email/templates";
 import { emailTransport, warnIfEmailUnconfigured } from "../src/server/email/sender";
 import { register } from "../src/instrumentation";
@@ -29,6 +29,20 @@ test("daily schedules catch up after downtime and enqueue the next UTC run", () 
     scheduledJobs(new Date("2026-11-08T03:00:29Z")).at(-1)!.uniqueKey,
     after.at(-1)!.uniqueKey,
   );
+});
+
+test("legacy project backfill is scheduled on boot and each runner tick", () => {
+  const boot = new Date("2026-11-08T12:00:17Z");
+  const at = (date: Date) => scheduledJobs(date).filter((job) => job.kind === "legacy_projects");
+  assert.ok(JOB_KINDS.includes("legacy_projects"));
+  assert.deepEqual(at(boot), [
+    {
+      kind: "legacy_projects",
+      uniqueKey: "legacy_projects:2026-11-08T12:00:00.000Z",
+      runAt: new Date("2026-11-08T12:00:00Z"),
+    },
+  ]);
+  assert.notEqual(at(new Date(boot.getTime() + TICK_MS))[0].uniqueKey, at(boot)[0].uniqueKey);
 });
 
 test("plain email layout escapes content, names context, and restricts links to APP_URL", () => {

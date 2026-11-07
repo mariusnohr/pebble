@@ -57,11 +57,12 @@ pnpm start
 
 Next.js instrumentation starts the in-process runner in the Node runtime when `DATABASE_URL` is set. It does not start during `next build` or in the Edge runtime. No external scheduler or separate worker is needed. The runner ticks immediately at startup and every 30 seconds thereafter:
 
-| Job         | Schedule           | Work                                                                                                                       |
-| ----------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `retention` | Daily at 03:00 UTC | Delete events by `occurred_at` and visits by `last_seen_at`, using each project's retention.                               |
-| `purge`     | Daily at 03:30 UTC | Delete expired admin sessions and rate-limit buckets, finished jobs older than 7 days, and outbox rows older than 30 days. |
-| `outbox`    | Every tick         | Send due queued emails, at most 25 rows / roughly 20 seconds per run (an in-flight request may take another 10 seconds).   |
+| Job               | Schedule           | Work                                                                                                                       |
+| ----------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `retention`       | Daily at 03:00 UTC | Delete events by `occurred_at` and visits by `last_seen_at`, using each project's retention.                               |
+| `purge`           | Daily at 03:30 UTC | Delete expired admin sessions and rate-limit buckets, finished jobs older than 7 days, and outbox rows older than 30 days. |
+| `outbox`          | Every tick         | Send due queued emails, at most 25 rows / roughly 20 seconds per run (an in-flight request may take another 10 seconds).   |
+| `legacy_projects` | Every tick         | Assign projects with NULL `organization_id` to the legacy Pebble organization during the M1 rollback window.               |
 
 Daily schedules have unique keys such as `retention:2026-11-08`. Startup catches up the most recent due day and schedules the next day. Claims use `FOR UPDATE SKIP LOCKED` and two-minute leases. PostgreSQL advisory locks allow at most one running job per kind across overlapping app processes, even when a run outlasts its lease. A disconnected worker's lease can be reclaimed. Handlers must be idempotent; SQL cleanup safely repeats committed batches, and Resend deduplicates sends with the outbox UUID as `Idempotency-Key`. Every completed/failed run emits one JSON line with `kind`, `duration_ms` and `outcome`; startup emits `job_runner_started`. Payloads and exception messages are never included in job logs.
 
@@ -213,13 +214,42 @@ pnpm test          # Unit and SDK tests
 pnpm check         # Formatting, lint, types, and unit tests
 ```
 
-Database integration tests need a **dedicated** database whose name starts with `pebble_test`. They apply migrations, create isolated fixtures, and clean them up. Test files run sequentially because they share migrations and exercise global maintenance jobs; the job suite uses concurrent connections to test overlapping workers. Email HTTP requests are mocked:
+Database integration tests need a **dedicated, disposable** database whose name starts with `pebble_test`. **The cutover test resets its public and Drizzle schemas**, applies only migration 0000, seeds data through a frozen copy of the `abb7927a` schema, and then applies all migrations. It checks preserved values, old-release queries, and the runner backfill. Never point integration tests at a restored dump you want to rehearse. Test files run sequentially (`--test-concurrency=1`) because they share migrations and exercise global maintenance jobs; the job suite uses concurrent connections to test overlapping workers. Email HTTP requests are mocked:
 
 ```sh
 TEST_DATABASE_URL=postgresql://localhost:5432/pebble_test pnpm test:integration
 ```
 
 Use `pnpm db:generate` after editing `src/db/schema.ts`. Commit generated SQL and metadata, then apply with `pnpm db:migrate`. Do not use schema push as the production migration workflow.
+
+### M1 expand and rollback window
+
+**M1 migrations must remain additive until the M2 contract step.** Migrations run during the build while the previous release still serves requests. Keep existing tables, columns, constraints and indexes; do not drop, rename, retype or set existing columns NOT NULL. New columns must be nullable or have defaults. `tests/migrations.test.ts` conservatively enforces this for every migration after 0000 (including new tables) and tests rejected SQL examples. Lift that guard only in the M2 contract task.
+
+Migration 0002 adds the account schema, `audit_log`, `usage_periods`, nullable `projects.organization_id`, and `projects.agent_context` (default empty, at most 4,000 characters). Its idempotent data step creates **Pebble**, slug `pebble`, with a **Business** override and assigns existing projects. `LEGACY_ORGANIZATION_ID` in `src/server/legacy-organization.ts` is stable even if the name or slug changes. New projects created by this release receive it immediately. Projects created by an old release during a build or rollback are assigned at startup or the next 30-second runner tick. Explicit organization assignments are never overwritten.
+
+Admin-password sign-in and all existing dashboard and tracking routes remain active in this expand-only release. `admin_sessions`, `rate_limits`, ingest keys, events and visits retain their old shape. Better Auth is configured solely for schema generation in `src/server/auth-options.ts`; there is no `/api/auth` route. No feature writes audit or usage entries yet. Account sign-in, ownership claims and authorization switch in the later accounts task; dropping legacy auth and requiring project organizations wait until M2. Keep `ADMIN_PASSWORD_HASH` throughout the rollback window.
+
+Better Auth, its Drizzle adapter and its current CLI package (`auth`) are pinned together. To regenerate the auth tables:
+
+```sh
+pnpm exec auth generate --config src/server/auth-options.ts --adapter drizzle --dialect postgresql --output src/db/auth-schema.ts --yes
+```
+
+Before `pnpm db:generate`, retain the documented project additions in `auth-schema.ts`: timezone-aware timestamps, the plan/role/resend checks, unique `(organization_id, user_id)` membership and the partial unique owner index. Better Auth's own database rate limiter uses **`rate_limit`**; the pre-existing **`rate_limits`** stays unchanged. No new runtime auth secret is needed until Better Auth is mounted.
+
+### Rehearse the production cutover
+
+Before merging the expand step, the owner restores the latest nightly `pebble` dump into a **new `pebble_test_cutover` database with its own local role** (currently under 10 MB), then supplies its URL as `TEST_DATABASE_URL` through the environment. Keep this copy offline: no app or job runner may write to it during the rehearsal.
+
+```sh
+# TEST_DATABASE_URL must already point at the restored pebble_test_cutover copy.
+pnpm db:rehearse
+```
+
+The command rejects non-test database names, verifies the connected database's name, records every existing public table's row count, applies pending Drizzle migrations, and prints the before/after counts. It fails if any existing count changes, if the Pebble/business organization is missing, or if any project is outside it. New tables are expected and excluded from the before/after comparison. Re-running a successful rehearsal is safe. It never resets schemas, logs connection strings, or prints restored records; unlike integration tests, it preserves the restored data.
+
+Attach the complete successful output to the PR, then have the owner drop the rehearsal database. Also run `pnpm test:integration` on the separate disposable `pebble_test` database. After the platform deploys the preview, verify admin sign-in, project creation and existing histories, then send a pageview to `/api/v1/collect` with a project's allowed Origin and check Realtime. The rehearsal and preview checks are required before merging.
 
 ## Repository layout
 

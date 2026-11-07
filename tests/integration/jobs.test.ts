@@ -98,8 +98,8 @@ test("schedules use unique keys across overlapping deployments", async () => {
     "select id, unique_key from jobs",
   );
   jobIds.push(...rows.map((row) => row.id));
-  assert.equal(rows.length, 5);
-  assert.equal(new Set(rows.map((row) => row.unique_key)).size, 5);
+  assert.equal(rows.length, 6);
+  assert.equal(new Set(rows.map((row) => row.unique_key)).size, 6);
 });
 
 test("lease expiry recovers an interrupted claim, and retries back off and stop", async () => {
