@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { after, before, test } from "node:test";
 import { eq } from "drizzle-orm";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool, type PoolClient } from "pg";
 import { getDb, closeDb } from "../../src/db";
 import {
   M1_MIGRATION,
@@ -14,7 +16,7 @@ import {
 } from "../../scripts/migration-boundary";
 import { assertTestDatabase, requireTestDatabaseUrl } from "../../scripts/rehearse-cutover";
 import { LEGACY_ORGANIZATION_ID } from "../../src/server/legacy-organization";
-import { hashToken } from "../../src/server/crypto";
+import { hashToken, randomToken } from "../../src/server/crypto";
 import * as legacy from "./fixtures/legacy-schema";
 import * as m1 from "./fixtures/m1-schema";
 
@@ -29,7 +31,7 @@ const origin = "https://legacy.example";
 const ownerId = randomUUID(),
   otherId = randomUUID(),
   legacyProject = randomUUID();
-const token = `pb_${randomUUID()}`;
+const token = `pb_${randomToken()}`;
 const confirmation = "Disposable contract fixture; not a production confirmation";
 
 async function snapshot() {
@@ -68,6 +70,102 @@ async function expectBlocked(message: RegExp, reference = confirmation) {
   await assert.rejects(migrateWithConfirmation(pool, reference), databaseError(message));
   assert.deepEqual(sorted(await snapshot()), before);
   assert.deepEqual(await journal(), migrations);
+}
+
+async function waitForProjectLock(pid: number) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const { rows } = await pool.query(
+      `select 1 from pg_locks where pid = $1 and relation = 'projects'::regclass
+       and mode = 'AccessExclusiveLock' and not granted`,
+      [pid],
+    );
+    if (rows.length) return;
+    await delay(10);
+  }
+  assert.fail("The contract migration did not wait for the in-flight M1 project writes");
+}
+
+async function contractWithM1Writes(expected: Awaited<ReturnType<typeof snapshot>>) {
+  // A single-connection pool identifies the real migrator's backend without sleeps.
+  const migrationPool = new Pool({
+    connectionString: requireTestDatabaseUrl(),
+    max: 1,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+  });
+  const creator = await pool.connect();
+  const updater = await pool.connect();
+  let migration: Promise<PromiseSettledResult<void>> | undefined;
+
+  async function auditAndCommit(client: PoolClient, projectId: string, action: string) {
+    const auditId = randomUUID();
+    // Matches M1's project transaction: mutate the project, then insert its audit.
+    await client.query(
+      `insert into audit_log (id, organization_id, actor_user_id, actor_label, action, target_type, target_id)
+       values ($1, $2, $3, 'M1 owner', $4, 'project', $5)`,
+      [auditId, LEGACY_ORGANIZATION_ID, ownerId, action, projectId],
+    );
+    for (const [table, id] of [
+      ["projects", projectId],
+      ["audit_log", auditId],
+    ] as const) {
+      const { rows } = await client.query<{ row: Record<string, unknown> }>(
+        `select to_jsonb(t) as row from ${table} t where id = $1`,
+        [id],
+      );
+      expected[table] = expected[table].filter((row) => row.id !== id);
+      expected[table].push(rows[0].row);
+    }
+    await client.query("commit");
+  }
+
+  try {
+    for (const client of [creator, updater]) {
+      await client.query("begin");
+      await client.query("set local lock_timeout = '5s'");
+    }
+    // Pause an INSERT after its table lock but before its organization FK check.
+    await creator.query("lock table projects in row exclusive mode");
+    // Pause an UPDATE at the point where the next M1 statement inserts its audit.
+    await drizzle(updater)
+      .update(m1.projects)
+      .set({ name: "Updated by in-flight M1" })
+      .where(eq(m1.projects.id, legacyProject));
+    const {
+      rows: [{ pid }],
+    } = await migrationPool.query<{ pid: number }>("select pg_backend_pid() as pid");
+    migration = migrateWithConfirmation(migrationPool, confirmation).then(
+      () => ({ status: "fulfilled", value: undefined }),
+      (reason: unknown) => ({ status: "rejected", reason }),
+    );
+    // The guard has taken its organization lock and is now waiting for both writers.
+    await waitForProjectLock(pid);
+    const writes = await Promise.allSettled([
+      (async () => {
+        const [project] = await drizzle(creator)
+          .insert(m1.projects)
+          .values({
+            name: "Created by in-flight M1",
+            origins: [origin],
+            organizationId: LEGACY_ORGANIZATION_ID,
+          })
+          .returning();
+        await auditAndCommit(creator, project.id, "project.created");
+      })(),
+      auditAndCommit(updater, legacyProject, "project.updated"),
+    ]);
+    for (const result of writes) if (result.status === "rejected") throw result.reason;
+    const result = await migration;
+    if (result.status === "rejected") throw result.reason;
+  } finally {
+    // Release blockers even on a regression, then drain the handled migration promise.
+    await Promise.allSettled([creator.query("rollback"), updater.query("rollback")]);
+    creator.release();
+    updater.release();
+    await migration;
+    await migrationPool.end();
+  }
 }
 
 before(async () => {
@@ -217,15 +315,15 @@ test("F3 contracts atomically, preserves all tenant data, and supports the runni
     },
   );
   await t.test(
-    "claimed organization may be renamed; only NULL assignments and admin sessions change",
+    "concurrent M1 writes commit through contraction; renamed ownership and every row are preserved",
     async () => {
       await pool.query("update organization set name = 'Renamed', slug = 'renamed' where id = $1", [
         LEGACY_ORGANIZATION_ID,
       ]);
       const expected = await snapshot();
       delete expected.admin_sessions;
+      await contractWithM1Writes(expected);
       for (const project of expected.projects) project.organization_id ??= LEGACY_ORGANIZATION_ID;
-      await migrateWithConfirmation(pool, confirmation);
       assert.deepEqual(sorted(await snapshot()), sorted(expected));
       const column = await pool.query(
         "select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'projects' and column_name = 'organization_id'",

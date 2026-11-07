@@ -8,8 +8,10 @@ BEGIN
   END IF;
 
   -- Identity is stable even if the owner renamed Pebble or changed its slug.
+  -- Keep FK KEY SHARE checks compatible while waiting for the projects lock:
+  -- M1 project/audit inserts may already hold projects locks at this point.
   PERFORM 1 FROM "organization"
-    WHERE "id" = '8d3b7c14-a8c9-4ae4-91e9-a9cf44232f1b' FOR UPDATE;
+    WHERE "id" = '8d3b7c14-a8c9-4ae4-91e9-a9cf44232f1b' FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'F3 requires the legacy Pebble organization; restore or investigate before contracting';
   END IF;
