@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Keep legal texts available to server-side checkout readiness checks, too.
+  outputFileTracingIncludes: {
+    "/*": ["./src/content/legal/*.md"],
+  },
   poweredByHeader: false,
   devIndicators: false,
   turbopack: {

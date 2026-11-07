@@ -4,13 +4,11 @@ import { redirect } from "next/navigation";
 import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminSessions } from "@/db/schema";
-import { adminPasswordHash } from "./config";
+import { adminPasswordHash, appOrigin } from "./config";
 import { hashToken, randomToken } from "./crypto";
 
 const COOKIE = "pebble_admin";
-export function appOrigin() {
-  return new URL(process.env.APP_URL ?? "http://localhost:3000").origin;
-}
+export { appOrigin } from "./config";
 
 export async function verifyAdmin() {
   const token = (await cookies()).get(COOKIE)?.value;
