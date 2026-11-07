@@ -22,6 +22,8 @@ export const emailTemplates = {
   message: messageData,
   verifyEmail: messageData,
   signupAttempt: messageData,
+  passwordReset: messageData,
+  passwordChanged: messageData,
 };
 export type EmailTemplate = keyof typeof emailTemplates;
 export type EmailData<T extends EmailTemplate> = z.infer<(typeof emailTemplates)[T]>;

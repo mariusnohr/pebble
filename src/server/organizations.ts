@@ -1,6 +1,5 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { notFound } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { member, organization, projects, user } from "@/db/schema";
@@ -91,6 +90,9 @@ export class OrganizationSettingsError extends Error {}
 type OrganizationActor = { id: string; name: string; email: string; emailVerified: boolean };
 
 async function lockOrganization(tx: Transaction, slug: string, actor: OrganizationActor) {
+  // Auth configuration also imports this module outside Next's request runtime.
+  // Only the settings guard needs Next navigation, so load it when that guard runs.
+  const { notFound } = await import("next/navigation");
   if (!actor.emailVerified) notFound();
   const [access] = await tx
     .select({ organization, role: member.role })
@@ -180,7 +182,7 @@ export async function deleteOrganizationForUser(
 }
 
 // Internal helper for organization/account deletion flows. Caller authorizes first.
-// M2 adds subscription cancellation here. All dependent data uses FK cascades.
+// M2 adds subscription cancellation here. Dependent project data uses FK cascades.
 export async function deleteOrganization(tx: Transaction, organizationId: string) {
   // During the expand migration, NULL-owned projects also belong to the legacy organization.
   if (organizationId === LEGACY_ORGANIZATION_ID)

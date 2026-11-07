@@ -50,3 +50,32 @@ test("signup-attempt mail contains no verification link", () => {
   assert.deepEqual(result.links, []);
   assert.doesNotMatch(result.text, /token=|verify-email/);
 });
+
+test("auth rejects duplicate cookies before parsing credentials or accessing the database", async () => {
+  const { handleAuth } = await import("../src/server/auth-handler");
+  for (const name of [
+    "better-auth.two_factor",
+    "__Secure-better-auth.two_factor",
+    "better-auth.session_token",
+  ]) {
+    for (const cookie of [
+      `${name}=first; ${name}=second`,
+      `${name}=second; ${name}=first`,
+      `${name}=first; unrelated=value;\t${name} =second`,
+      `${name}="first"; ${name}="second"`,
+    ]) {
+      for (const path of ["two-factor/verify-totp", "two-factor/verify-backup-code"]) {
+        const response = await handleAuth(
+          new Request(`http://localhost:3000/api/auth/${path}`, {
+            method: "POST",
+            headers: { cookie, "Content-Type": "application/json" },
+            body: JSON.stringify({ code: "123456" }),
+          }),
+        );
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).code, "DUPLICATE_COOKIES");
+        assert.deepEqual(response.headers.getSetCookie(), []);
+      }
+    }
+  }
+});
