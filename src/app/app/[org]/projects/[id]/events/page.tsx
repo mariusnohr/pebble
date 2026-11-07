@@ -5,11 +5,12 @@ export default async function EventsPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ org: string; id: string }>;
   searchParams: Promise<{ days?: string }>;
 }) {
-  const project = await getProject((await params).id);
-  const report = await getReport(project, Number((await searchParams).days ?? 7));
+  const { org, id } = await params;
+  const project = await getProject(org, id);
+  const report = await getReport(org, project, Number((await searchParams).days ?? 7));
   return (
     <>
       <div className="report-toolbar">
@@ -17,7 +18,7 @@ export default async function EventsPage({
           <h2>The moments that matter.</h2>
           <span>Browser interactions and server outcomes, together.</span>
         </div>
-        <DateRange base={`/projects/${project.id}/events`} days={report.days} />
+        <DateRange base={`/app/${org}/projects/${project.id}/events`} days={report.days} />
       </div>
       <div className="panel">
         <div className="panel-heading">

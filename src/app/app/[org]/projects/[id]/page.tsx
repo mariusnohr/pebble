@@ -12,13 +12,14 @@ export default async function Overview({
   params,
   searchParams,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ org: string; id: string }>;
   searchParams: Promise<{ days?: string }>;
 }) {
-  const project = await getProject((await params).id);
+  const { org, id } = await params;
+  const project = await getProject(org, id);
   const [report, live] = await Promise.all([
-    getReport(project, Number((await searchParams).days ?? 7)),
-    getRealtime(project.id),
+    getReport(org, project, Number((await searchParams).days ?? 7)),
+    getRealtime(org, project.id),
   ]);
   return (
     <>
@@ -31,11 +32,11 @@ export default async function Overview({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Realtime compact projectId={project.id} initial={live} />
-          <DateRange base={`/projects/${project.id}`} days={report.days} />
+          <DateRange base={`/app/${org}/projects/${project.id}`} days={report.days} />
         </div>
       </div>
       {report.current.pageviews + report.current.customEvents === 0 && (
-        <InstallationPrompt projectId={project.id} />
+        <InstallationPrompt org={org} projectId={project.id} />
       )}
       <Metrics current={report.current} prior={report.prior} />
       <TrafficChart series={report.series} />

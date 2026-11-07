@@ -18,6 +18,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
         </Link>
         <nav aria-label="Public navigation">
           <Link href="/login">Sign in</Link>
+          <Link href="/signup">Start free</Link>
         </nav>
       </header>
       <main id="public-content" className="public-main" tabIndex={-1}>

@@ -26,7 +26,9 @@ export async function cleanupRetention(db: Connection) {
 export async function purgeMaintenance(db: Connection) {
   // Add future feature-specific purge steps here. Each batch commits independently.
   for (const [table, predicate] of [
-    ["admin_sessions", "expires_at < now()"],
+    ['"session"', "expires_at < now()"],
+    ["verification", "expires_at < now()"],
+    ["audit_log", "created_at < now() - interval '365 days'"],
     ["rate_limits", "expires_at < now()"],
     ["jobs", "finished_at < now() - interval '7 days'"],
     ["email_outbox", "created_at < now() - interval '30 days'"],

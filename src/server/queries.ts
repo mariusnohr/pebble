@@ -1,24 +1,18 @@
 import "server-only";
 import { desc, eq, sql } from "drizzle-orm";
-import { notFound } from "next/navigation";
-import { z } from "zod";
 import { getDb } from "@/db";
-import { apiKeys, projects, type Project } from "@/db/schema";
-import { requireAdmin } from "./auth";
+import { apiKeys, type Project } from "@/db/schema";
+import { requireOrganization, requireProject, organizationProjects } from "./tenancy";
+import { LEGACY_ORGANIZATION_ID } from "./legacy-organization";
 
-export async function listProjects() {
-  await requireAdmin();
-  return getDb().select().from(projects).orderBy(projects.createdAt);
+export async function listProjects(slug: string) {
+  return (await organizationProjects(slug)).projects;
 }
-export async function getProject(id: string) {
-  await requireAdmin();
-  if (!z.uuid().safeParse(id).success) notFound();
-  const [project] = await getDb().select().from(projects).where(eq(projects.id, id));
-  if (!project) notFound();
-  return project;
+export async function getProject(slug: string, id: string) {
+  return (await requireProject(slug, id)).project;
 }
-export async function listKeys(projectId: string) {
-  await requireAdmin();
+export async function listKeys(slug: string, projectId: string) {
+  await requireProject(slug, projectId);
   return getDb()
     .select({
       id: apiKeys.id,
@@ -61,8 +55,8 @@ async function totals(projectId: string, start: Date, end: Date): Promise<Totals
   return result.rows[0] as Totals;
 }
 
-export async function getReport(project: Project, days: number) {
-  await requireAdmin();
+export async function getReport(slug: string, project: Project, days: number) {
+  project = await getProject(slug, project.id);
   days = [1, 7, 30, 90].includes(days) ? days : 7;
   const db = getDb();
   const bound = await db.execute(
@@ -145,8 +139,8 @@ export async function getReport(project: Project, days: number) {
   };
 }
 
-export async function getRealtime(projectId: string) {
-  await requireAdmin();
+export async function getRealtime(slug: string, projectId: string) {
+  await requireProject(slug, projectId);
   const result = await getDb()
     .execute(sql`select distinct on (visitor_id) visitor_id as "visitorId", coalesce(current_path, '/') as path,
     coalesce(device, 'Unknown') as device, coalesce(browser, 'Unknown') as browser, browser_seen_at as "lastSeen"
@@ -155,14 +149,14 @@ export async function getRealtime(projectId: string) {
   return result.rows as LiveVisit[];
 }
 
-export async function getPortfolio() {
-  await requireAdmin();
+export async function getPortfolio(slug: string) {
+  const { organization } = await requireOrganization(slug);
   const result = await getDb().execute(sql`select p.id,
     (select count(distinct visitor_id)::int from events e where e.project_id = p.id and occurred_at >= now() - interval '7 days') as visitors,
     (select count(*)::int from events e where e.project_id = p.id and type = 'pageview' and occurred_at >= now() - interval '7 days') as pageviews,
     (select count(distinct visitor_id)::int from visits v where v.project_id = p.id and browser_seen_at > now() - interval '60 seconds') as online,
     (select max(received_at) from events e where e.project_id = p.id) as "lastEvent"
-    from projects p order by p.created_at`);
+    from projects p where (p.organization_id = ${organization.id} or (p.organization_id is null and ${organization.id} = ${LEGACY_ORGANIZATION_ID})) order by p.created_at`);
   return result.rows as {
     id: string;
     visitors: number;
