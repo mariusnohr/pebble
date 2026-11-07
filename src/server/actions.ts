@@ -12,6 +12,7 @@ import { assertSameOrigin, createAdminSession, destroyAdminSession, requireAdmin
 import { adminPasswordHash } from "./config";
 import { hashToken, randomToken, verifyPassword } from "./crypto";
 import { clientAddress, rateLimit } from "./rate-limit";
+import { LEGACY_ORGANIZATION_ID } from "./legacy-organization";
 
 export type ActionState = { error?: string; success?: string; secret?: string; projectId?: string };
 
@@ -65,7 +66,10 @@ export async function saveProjectAction(_: ActionState, form: FormData): Promise
         .set(data)
         .where(eq(projects.id, String(id)))
         .returning()
-    : await getDb().insert(projects).values(data).returning();
+    : await getDb()
+        .insert(projects)
+        .values({ ...data, organizationId: LEGACY_ORGANIZATION_ID })
+        .returning();
   if (!project) return { error: "Project no longer exists." };
   revalidatePath("/", "layout");
   return { success: id ? "Project updated." : "Project created.", projectId: project.id };

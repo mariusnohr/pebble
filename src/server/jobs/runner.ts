@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { getDb } from "../../db";
 import { sendOutbox, warnIfEmailUnconfigured } from "../email/sender";
 import { cleanupRetention, purgeMaintenance } from "./cleanup";
+import { backfillLegacyProjects } from "./legacy-projects";
 import {
   enqueueSchedules,
   JOB_KINDS,
@@ -16,6 +17,7 @@ const handlers: Record<JobKind, JobHandler> = {
   retention: cleanupRetention,
   purge: purgeMaintenance,
   outbox: (db) => sendOutbox(db),
+  legacy_projects: backfillLegacyProjects,
 };
 const globalRunner = globalThis as unknown as { pebbleJobRunner?: ReturnType<typeof setInterval> };
 

@@ -5,12 +5,16 @@ import {
   text,
   timestamp,
   integer,
+  bigint,
   boolean,
   jsonb,
   primaryKey,
   index,
   check,
 } from "drizzle-orm/pg-core";
+import { organization, user } from "./auth-schema";
+
+export * from "./auth-schema";
 
 const time = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 
@@ -18,6 +22,10 @@ export const projects = pgTable(
   "projects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    agentContext: text("agent_context").notNull().default(""),
     name: text("name").notNull(),
     origins: text("origins").array().notNull(),
     timezone: text("timezone").notNull().default("UTC"),
@@ -25,7 +33,11 @@ export const projects = pgTable(
     retentionDays: integer("retention_days").notNull().default(90),
     createdAt: time("created_at").notNull().defaultNow(),
   },
-  (t) => [check("retention_range", sql`${t.retentionDays} between 7 and 730`)],
+  (t) => [
+    check("retention_range", sql`${t.retentionDays} between 7 and 730`),
+    check("projects_agent_context_length", sql`char_length(${t.agentContext}) <= 4000`),
+    index("projects_organization_id").on(t.organizationId),
+  ],
 );
 
 export const visits = pgTable(
@@ -157,6 +169,51 @@ export const emailOutbox = pgTable(
     index("email_outbox_created").on(t.createdAt),
     check("email_outbox_status", sql`${t.status} in ('queued', 'sent', 'failed')`),
     check("email_outbox_attempts_nonnegative", sql`${t.attempts} >= 0`),
+  ],
+);
+
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    actorLabel: text("actor_label").notNull(),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: uuid("target_id").notNull(),
+    details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: time("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("audit_log_organization_time").on(t.organizationId, t.createdAt, t.id),
+    index("audit_log_created").on(t.createdAt),
+  ],
+);
+
+export const usagePeriods = pgTable(
+  "usage_periods",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    period: text("period").notNull(),
+    events: bigint("events", { mode: "number" }).notNull().default(0),
+    droppedEvents: bigint("dropped_events", { mode: "number" }).notNull().default(0),
+    aiCredits: bigint("ai_credits", { mode: "number" }).notNull().default(0),
+    warned80At: time("warned80_at"),
+    warned100At: time("warned100_at"),
+    stoppedAt: time("stopped_at"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.organizationId, t.period] }),
+    check("usage_periods_month", sql`${t.period} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+    check(
+      "usage_periods_nonnegative",
+      sql`${t.events} >= 0 and ${t.droppedEvents} >= 0 and ${t.aiCredits} >= 0`,
+    ),
   ],
 );
 

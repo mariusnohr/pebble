@@ -15,6 +15,13 @@
       "when": 1794083781571,
       "tag": "0001_aberrant_trish_tilby",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794087018498,
+      "tag": "0002_magenta_prodigy",
+      "breakpoints": true
     }
   ]
 }
