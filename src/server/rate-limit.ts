@@ -18,7 +18,8 @@ export async function rateLimit(key: string, limit: number, seconds = 60) {
   return row.count <= limit;
 }
 
-// Enable only when the application's trusted reverse proxy overwrites this header.
+// Enable only behind a trusted proxy that appends the client IP as the last entry
+// and prevents direct access to the app. Earlier entries may be client-supplied.
 export function clientAddress(headers: Headers) {
   return process.env.TRUST_PROXY === "true"
     ? (headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() || "unknown").slice(0, 100)

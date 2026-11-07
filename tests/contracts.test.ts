@@ -8,7 +8,8 @@ import {
   propertiesSchema,
   validTimezone,
 } from "../src/lib/contracts";
-import { readJson } from "../src/server/http";
+import { apiError, readJson } from "../src/server/http";
+import { IngestError } from "../src/server/ingestion";
 
 test("paths drop query strings and fragments and origins are exact", () => {
   assert.equal(cleanPath("/pricing?email=private@example.com#details"), "/pricing");
@@ -52,10 +53,55 @@ test("request parser enforces actual streamed payload size", async () => {
       }),
       32,
     ),
-    /too large/,
+    { message: "Payload too large.", status: 413, code: "payload_too_large" },
   );
   await assert.rejects(
     readJson(new Request("http://localhost", { method: "POST", body: "invalid" })),
-    /Invalid JSON/,
+    { message: "Invalid JSON body.", status: 400, code: "invalid_payload" },
   );
+});
+
+test("request parser rejects missing bodies and oversized declared lengths with codes", async () => {
+  await assert.rejects(readJson(new Request("http://localhost", { method: "POST" })), {
+    message: "Missing request body.",
+    status: 400,
+    code: "invalid_payload",
+  });
+  await assert.rejects(
+    readJson(
+      new Request("http://localhost", {
+        method: "POST",
+        headers: { "content-length": "32769" },
+        body: "{}",
+      }),
+    ),
+    { message: "Payload too large.", status: 413, code: "payload_too_large" },
+  );
+});
+
+test("API errors preserve messages and headers and give rate limits a retry delay", async () => {
+  const response = apiError(new IngestError("Project rate limit exceeded.", 429, "rate_limited"), {
+    "Access-Control-Allow-Origin": "https://website.example",
+    "Cache-Control": "no-store",
+  });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("Retry-After"), "60");
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://website.example");
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(await response.json(), {
+    error: "Project rate limit exceeded.",
+    code: "rate_limited",
+  });
+});
+
+test("unexpected API failures return unavailable without exposing internal errors", async (t) => {
+  const log = t.mock.method(console, "error", () => {});
+  const response = apiError(new Error("Internal database detail"), { "Cache-Control": "no-store" });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(await response.json(), {
+    error: "Analytics is temporarily unavailable.",
+    code: "unavailable",
+  });
+  assert.deepEqual(log.mock.calls[0].arguments, ["Analytics request failed", "Error"]);
 });
