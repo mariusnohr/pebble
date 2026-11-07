@@ -7,7 +7,7 @@ import { z } from "zod";
 import { getDb } from "@/db";
 import { apiKeys, projects, user } from "@/db/schema";
 import { normalizeOrigins, projectSchema } from "@/lib/contracts";
-import { assertSameOrigin, requireUser } from "./auth";
+import { assertSameOrigin, requireMemberUser, requireUser } from "./auth";
 import { hashToken, randomToken } from "./crypto";
 import {
   assertOrganizationAdmin,
@@ -15,10 +15,53 @@ import {
   requireProject,
   projectOrganization,
 } from "./tenancy";
-import { createOrganization } from "./organizations";
+import {
+  createOrganization,
+  updateOrganization,
+  deleteOrganizationForUser,
+  OrganizationSettingsError,
+} from "./organizations";
 import { recordAudit } from "./audit";
 
 export type ActionState = { error?: string; success?: string; secret?: string; projectId?: string };
+
+export async function updateOrganizationAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await assertSameOrigin();
+  const actor = await requireMemberUser();
+  const slug = String(form.get("org") ?? "");
+  let saved;
+  try {
+    saved = await updateOrganization(actor, slug, {
+      name: form.get("name"),
+      slug: form.get("slug"),
+    });
+  } catch (error) {
+    if (error instanceof OrganizationSettingsError) return { error: error.message };
+    throw error;
+  }
+  revalidatePath("/app", "layout");
+  if (saved.slug !== slug) redirect(`/app/${saved.slug}/settings`);
+  return { success: "Organization updated." };
+}
+
+export async function deleteOrganizationAction(
+  _: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  await assertSameOrigin();
+  const actor = await requireMemberUser();
+  try {
+    await deleteOrganizationForUser(actor, String(form.get("org") ?? ""), form.get("confirmation"));
+  } catch (error) {
+    if (error instanceof OrganizationSettingsError) return { error: error.message };
+    throw error;
+  }
+  revalidatePath("/app", "layout");
+  redirect("/app");
+}
 
 export async function createOrganizationAction(
   _: ActionState,
