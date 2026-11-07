@@ -17,11 +17,13 @@ export async function claimLegacyOrganization(
 ) {
   if (!isOperator(actor.email)) return;
   // Serializes competing operators; called in the verification transaction.
-  await tx
+  const [legacy] = await tx
     .select()
     .from(organization)
     .where(eq(organization.id, LEGACY_ORGANIZATION_ID))
     .for("update");
+  // Deleting Pebble must not prevent later operators from verifying their email.
+  if (!legacy) return;
   const [owner] = await tx
     .select()
     .from(member)
@@ -45,6 +47,9 @@ export async function claimLegacyOrganization(
 export async function createOrganization(userId: string, name: string) {
   name = z.string().trim().min(1).max(60).parse(name);
   return getDb().transaction(async (tx) => {
+    // Acquire the shared slug lock before row locks, as settings updates do.
+    // Otherwise their audit actor FK can wait on this user while we wait on the slug lock.
+    await tx.execute(sql`select pg_advisory_xact_lock(71001)`);
     const [actor] = await tx.select().from(user).where(eq(user.id, userId)).for("update");
     if (!actor?.emailVerified) throw new Error("Verify your email first.");
     const owned = await tx
@@ -60,8 +65,6 @@ export async function createOrganization(userId: string, name: string) {
       .slice(0, 30)
       .replace(/-$/g, "");
     if (base.length < 3 || reserved.has(base)) base = `org-${base || "team"}`;
-    // Serialize slug selection, including different users choosing the same name.
-    await tx.execute(sql`select pg_advisory_xact_lock(71001)`);
     let slug = base;
     for (let suffix = 2; ; suffix++) {
       const [existing] = await tx

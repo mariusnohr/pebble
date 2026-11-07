@@ -2,6 +2,7 @@ import "next/dist/server/node-environment-baseline.js";
 import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { eq, inArray } from "drizzle-orm";
 import { getDb, closeDb } from "../../src/db";
@@ -37,7 +38,8 @@ process.env.SIGNUP_OPEN = "true";
 const { handleAuth } = await import("../../src/server/auth-handler");
 const { resolveOrganization, requireOrganizationSettings } =
   await import("../../src/server/tenancy");
-const { createOrganization, deleteOrganization } = await import("../../src/server/organizations");
+const { createOrganization, deleteOrganization, updateOrganization } =
+  await import("../../src/server/organizations");
 const actions = await import("../../src/server/actions");
 const { default: AppPage } = await import("../../src/app/app/page");
 const { POST: collect } = await import("../../src/app/api/v1/collect/route");
@@ -103,8 +105,8 @@ async function tokenFor(email: string) {
   const payload = mail.payload as { links: { path: string }[] };
   return new URL(payload.links[0].path, process.env.APP_URL).searchParams.get("token")!;
 }
-async function verified() {
-  const actor = await signup();
+async function verified(email?: string) {
+  const actor = await signup(email);
   const response = await request(`verify-email?token=${await tokenFor(actor.email)}`);
   assert.equal(response.status, 200);
   const cookie = response.headers
@@ -446,4 +448,105 @@ test("legacy deletion includes NULL-owned projects, with rollback preserving the
     }),
     (error) => error === rollback,
   );
+});
+
+test("deleting Pebble does not prevent another operator from verifying their email", async () => {
+  const [legacy] = await db
+    .select()
+    .from(organization)
+    .where(eq(organization.id, LEGACY_ORGANIZATION_ID));
+  assert.ok(legacy);
+  const firstEmail = `operator-${randomUUID()}@example.com`;
+  const nextEmail = `operator-${randomUUID()}@example.com`;
+  const previousOperators = process.env.OPERATOR_EMAILS;
+  process.env.OPERATOR_EMAILS = `${firstEmail},${nextEmail}`;
+  try {
+    const owner = await verified(firstEmail);
+    assert.equal((await resolveOrganization(legacy.slug, owner.actor)).role, "owner");
+    await assert.rejects(
+      asUser(owner.cookie, () =>
+        actions.deleteOrganizationAction({}, form({ org: legacy.slug, confirmation: legacy.name })),
+      ),
+      redirectedTo("/app"),
+    );
+    const next = await verified(nextEmail);
+    const [account] = await db.select().from(user).where(eq(user.id, next.actor.id));
+    assert.equal(account.emailVerified, true);
+    assert.equal(account.lastOrganizationId, null);
+    assert.equal(
+      (await db.select().from(member).where(eq(member.userId, next.actor.id))).length,
+      0,
+    );
+    assert.equal(
+      (await db.select().from(organization).where(eq(organization.id, legacy.id))).length,
+      0,
+    );
+    const sessionResponse = await request("get-session", undefined, undefined, next.cookie);
+    assert.equal(sessionResponse.status, 200);
+    assert.equal((await sessionResponse.json()).user.id, next.actor.id);
+  } finally {
+    if (previousOperators === undefined) delete process.env.OPERATOR_EMAILS;
+    else process.env.OPERATOR_EMAILS = previousOperators;
+    // The following tenancy suite also uses the migration's legacy organization fixture.
+    await db.insert(organization).values(legacy).onConflictDoNothing();
+  }
+});
+
+async function waitForBlockedQuery(blockerPid: number, query: string) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const { rows } = await db.$client.query<{ pid: number }>(
+      `select pid from pg_stat_activity
+       where datname = current_database() and $1 = any(pg_blocking_pids(pid))
+       and position($2 in query) > 0`,
+      [blockerPid, query],
+    );
+    if (rows.length) return rows[0].pid;
+    await delay(10);
+  }
+  assert.fail("Expected database lock wait was not observed.");
+}
+
+test("same-owner creation and settings updates complete with synchronized lock contention", async () => {
+  const { actor } = await verified();
+  const org = await orgFor(actor.id);
+  const name = "Concurrent rename",
+    slug = `concurrent-${randomUUID().slice(0, 8)}`;
+  const blocker = await db.$client.connect();
+  const pending: Promise<unknown>[] = [];
+  try {
+    await blocker.query("begin");
+    const {
+      rows: [{ pid }],
+    } = await blocker.query<{ pid: number }>("select pg_backend_pid() as pid");
+    await blocker.query("select id from organization where id = $1 for update", [org.id]);
+    // Settings holds the advisory lock but cannot update the organization yet.
+    const updating = updateOrganization(actor, org.slug, { name, slug });
+    pending.push(updating);
+    void updating.catch(() => {});
+    const updatePid = await waitForBlockedQuery(pid, '"organization"');
+    const creating = orgFor(actor.id, "Concurrent creation");
+    pending.push(creating);
+    void creating.catch(() => {});
+    await waitForBlockedQuery(updatePid, "pg_advisory_xact_lock(71001)");
+    // Before the fix, creation held the user FOR UPDATE at this point; releasing
+    // the organization made the settings audit wait on that user and deadlock.
+    await blocker.query("commit");
+    const [updated, created] = await Promise.all([updating, creating]);
+    assert.equal(updated.name, name);
+    assert.equal(updated.slug, slug);
+    assert.equal((await resolveOrganization(created.slug, actor)).role, "owner");
+    assert.equal((await resolveOrganization(slug, actor)).organization.id, org.id);
+    await assert.rejects(resolveOrganization(org.slug, actor), notFound);
+    const entries = await audits(org.id);
+    assert.deepEqual(entries.map((entry) => entry.action).sort(), [
+      "organization.renamed",
+      "organization.slug_changed",
+    ]);
+    assert.ok(entries.every((entry) => entry.actorUserId === actor.id));
+  } finally {
+    await blocker.query("rollback");
+    blocker.release();
+    await Promise.allSettled(pending);
+  }
 });
