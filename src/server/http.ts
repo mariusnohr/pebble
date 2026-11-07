@@ -2,7 +2,7 @@ import { IngestError } from "./ingestion";
 
 export async function readJson(request: Request, maxBytes = 32768) {
   if (Number(request.headers.get("content-length") ?? 0) > maxBytes)
-    throw new IngestError("Payload too large.", 413);
+    throw new IngestError("Payload too large.", 413, "payload_too_large");
   const reader = request.body?.getReader();
   if (!reader) throw new IngestError("Missing request body.");
   let size = 0;
@@ -14,7 +14,7 @@ export async function readJson(request: Request, maxBytes = 32768) {
       size += value.byteLength;
       if (size > maxBytes) {
         await reader.cancel();
-        throw new IngestError("Payload too large.", 413);
+        throw new IngestError("Payload too large.", 413, "payload_too_large");
       }
       chunks.push(value);
     }
@@ -34,11 +34,17 @@ export async function readJson(request: Request, maxBytes = 32768) {
 }
 
 export function apiError(error: unknown, headers?: HeadersInit) {
-  if (error instanceof IngestError)
-    return Response.json({ error: error.message }, { status: error.status, headers });
+  if (error instanceof IngestError) {
+    const responseHeaders = new Headers(headers);
+    if (error.code === "rate_limited") responseHeaders.set("Retry-After", "60");
+    return Response.json(
+      { error: error.message, code: error.code },
+      { status: error.status, headers: responseHeaders },
+    );
+  }
   console.error("Analytics request failed", error instanceof Error ? error.name : "UnknownError");
   return Response.json(
-    { error: "Analytics is temporarily unavailable." },
+    { error: "Analytics is temporarily unavailable.", code: "unavailable" },
     { status: 503, headers },
   );
 }

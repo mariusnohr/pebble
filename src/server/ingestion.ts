@@ -1,13 +1,25 @@
 import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { events, projects, visits } from "@/db/schema";
+import { events, projects, usagePeriods, visits } from "@/db/schema";
 import type { TrackingMessage } from "@/lib/contracts";
+import { LEGACY_ORGANIZATION_ID } from "./legacy-organization";
+
+export type IngestErrorCode =
+  | "invalid_payload"
+  | "payload_too_large"
+  | "unauthorized"
+  | "forbidden_origin"
+  | "project_not_found"
+  | "project_paused"
+  | "rate_limited"
+  | "unavailable";
 
 export class IngestError extends Error {
   constructor(
     message: string,
     public status = 400,
+    public code: IngestErrorCode = "invalid_payload",
   ) {
     super(message);
   }
@@ -76,10 +88,12 @@ export async function ingest(
       .from(projects)
       .where(eq(projects.id, projectId))
       .for("share");
-    if (!project) throw new IngestError("Project not found.", 404);
+    if (!project) throw new IngestError("Project not found.", 404, "project_not_found");
+    if (source === "browser" && (!context.origin || context.origin === "null"))
+      throw new IngestError("A website origin is required.", 403, "forbidden_origin");
     if (source === "browser" && !project.origins.includes(context.origin ?? ""))
-      throw new IngestError("Origin is not allowed for this project.", 403);
-    if (project.paused) throw new IngestError("Collection is paused.", 403);
+      throw new IngestError("Origin is not allowed for this project.", 403, "forbidden_origin");
+    if (project.paused) throw new IngestError("Collection is paused.", 403, "project_paused");
     // Ignore common crawlers without letting them create visits or presence.
     if (
       source === "browser" &&
@@ -88,6 +102,7 @@ export async function ingest(
       return { accepted: 0, duplicates: 0, ignored: messages.length };
     let accepted = 0;
     let duplicates = 0;
+    let eventCount = 0;
     for (const m of messages) {
       const occurredAt = source === "browser" ? now : m.timestamp ? new Date(m.timestamp) : now;
       if (m.type === "heartbeat") {
@@ -178,7 +193,22 @@ export async function ingest(
           throw new IngestError("Visit belongs to a different visitor.");
       }
       accepted++;
+      eventCount++;
     }
+    // D22: lock the monthly counter only for this final statement, until commit.
+    // Receipt time determines the UTC period, including for backdated server events.
+    if (eventCount > 0)
+      await tx
+        .insert(usagePeriods)
+        .values({
+          organizationId: project.organizationId ?? LEGACY_ORGANIZATION_ID,
+          period: now.toISOString().slice(0, 7),
+          events: eventCount,
+        })
+        .onConflictDoUpdate({
+          target: [usagePeriods.organizationId, usagePeriods.period],
+          set: { events: sql`${usagePeriods.events} + ${eventCount}` },
+        });
     return { accepted, duplicates, ignored: 0 };
   });
 }
