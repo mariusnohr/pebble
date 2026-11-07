@@ -6,9 +6,30 @@ import {
   envelopeSchema,
   normalizeOrigins,
   propertiesSchema,
+  projectSchema,
   validTimezone,
 } from "../src/lib/contracts";
 import { readJson } from "../src/server/http";
+
+test("agent context accepts 4,000 Unicode characters and rejects 4,001 without trimming", () => {
+  const project = {
+    name: "Test",
+    origins: "https://example.test",
+    timezone: "UTC",
+    retentionDays: 90,
+  };
+  for (const character of ["a", "🙂", " "]) {
+    const agentContext = character.repeat(4000);
+    assert.equal(projectSchema.parse({ ...project, agentContext }).agentContext, agentContext);
+    const invalid = projectSchema.safeParse({ ...project, agentContext: agentContext + character });
+    assert.equal(invalid.success, false);
+    if (!invalid.success)
+      assert.equal(
+        invalid.error.issues[0].message,
+        "Agent context must be at most 4,000 characters.",
+      );
+  }
+});
 
 test("paths drop query strings and fragments and origins are exact", () => {
   assert.equal(cleanPath("/pricing?email=private@example.com#details"), "/pricing");

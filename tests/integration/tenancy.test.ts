@@ -40,6 +40,8 @@ const { getProject, listProjects, listKeys, getRealtime, getReport, getPortfolio
   await import("../../src/server/queries");
 const actions = await import("../../src/server/actions");
 const { GET: realtime } = await import("../../src/app/api/projects/[id]/realtime/route");
+const { GET: firstEvent } = await import("../../src/app/api/projects/[id]/first-event/route");
+const { POST: collect } = await import("../../src/app/api/v1/collect/route");
 const { GET: legacy } = await import("../../src/app/projects/[id]/[[...path]]/route");
 const db = getDb();
 const emails: string[] = [],
@@ -259,6 +261,10 @@ test("tenant reads, key actions and realtime reject foreign IDs; member mutation
     () => getRealtime(orgB.slug, projectA.id),
     () => getReport(orgB.slug, projectA, 7),
     () =>
+      firstEvent(new Request(`${process.env.APP_URL}/api/projects/${projectA.id}/first-event`), {
+        params: Promise.resolve({ id: projectA.id }),
+      }),
+    () =>
       realtime(new Request(`${process.env.APP_URL}/api/projects/${projectA.id}/realtime`), {
         params: Promise.resolve({ id: projectA.id }),
       }),
@@ -313,6 +319,84 @@ test("tenant reads, key actions and realtime reject foreign IDs; member mutation
     (await db.select().from(auditLog).where(eq(auditLog.organizationId, orgA.id))).length,
     0,
   );
+});
+
+test("first-event status follows accepted pageviews and agent context saves atomically with its audit", async () => {
+  const { actor, cookie } = await verified();
+  const org = await orgFor(actor.id);
+  const values = {
+    org: org.slug,
+    name: "Connect test",
+    origins: "https://example.test",
+    timezone: "UTC",
+    retentionDays: "90",
+  };
+  const created = await asUser(cookie, () => actions.saveProjectAction({}, form(values)));
+  assert.ok(created.projectId);
+  const id = created.projectId;
+  projectIds.push(id);
+  const status = () =>
+    asUser(cookie, () =>
+      firstEvent(new Request(`${process.env.APP_URL}/api/projects/${id}/first-event`), {
+        params: Promise.resolve({ id }),
+      }),
+    );
+  assert.deepEqual(await (await status()).json(), { firstEventAt: null });
+  assert.equal((await asUser(cookie, () => getPortfolio(org.slug)))[0].lastEvent, null);
+  await assert.rejects(
+    asUser("", () =>
+      firstEvent(new Request(`${process.env.APP_URL}/api/projects/${id}/first-event`), {
+        params: Promise.resolve({ id }),
+      }),
+    ),
+    notFound,
+  );
+
+  const message = {
+    id: randomUUID(),
+    type: "heartbeat",
+    path: "/",
+    visitorId: randomUUID(),
+    visitId: randomUUID(),
+  };
+  const send = (origin: string, type: string) =>
+    collect(
+      new Request(`${process.env.APP_URL}/api/v1/collect`, {
+        method: "POST",
+        headers: { origin, "Content-Type": "application/json", "x-forwarded-for": "192.0.2.8" },
+        body: JSON.stringify({ projectId: id, events: [{ ...message, id: randomUUID(), type }] }),
+      }),
+    );
+  assert.equal((await send("https://foreign.test", "pageview")).status, 403);
+  assert.equal((await send(values.origins, "heartbeat")).status, 200);
+  assert.deepEqual(await (await status()).json(), { firstEventAt: null });
+  assert.equal((await send(values.origins, "pageview")).status, 200);
+  const response = await status();
+  assert.equal(response.headers.get("Cache-Control"), "private, no-store");
+  const received = await response.json();
+  assert.ok(Number.isFinite(Date.parse(received.firstEventAt)));
+  assert.ok((await asUser(cookie, () => getPortfolio(org.slug)))[0].lastEvent);
+  assert.equal((await send(values.origins, "pageview")).status, 200);
+  assert.deepEqual(await (await status()).json(), received);
+
+  const agentContext = "🙂".repeat(4000);
+  const saved = await asUser(cookie, () =>
+    actions.saveProjectAction({}, form({ ...values, id, agentContext })),
+  );
+  assert.equal(saved.success, "Project updated.");
+  assert.equal((await asUser(cookie, () => getProject(org.slug, id))).agentContext, agentContext);
+  const audits = () => db.select().from(auditLog).where(eq(auditLog.organizationId, org.id));
+  assert.equal((await audits()).filter((entry) => entry.action === "project.updated").length, 1);
+  const rejected = await asUser(cookie, () =>
+    actions.saveProjectAction({}, form({ ...values, id, agentContext: agentContext + "a" })),
+  );
+  assert.equal(rejected.error, "Agent context must be at most 4,000 characters.");
+  assert.equal((await asUser(cookie, () => getProject(org.slug, id))).agentContext, agentContext);
+  assert.equal((await audits()).filter((entry) => entry.action === "project.updated").length, 1);
+  await asUser(cookie, () =>
+    actions.saveProjectAction({}, form({ ...values, id, agentContext: "" })),
+  );
+  assert.equal((await asUser(cookie, () => getProject(org.slug, id))).agentContext, "");
 });
 
 test("wrong email and password match; eleventh sign-in is limited independently of spoofed first IP", async () => {
