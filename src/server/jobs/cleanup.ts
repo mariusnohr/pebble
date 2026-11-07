@@ -28,6 +28,7 @@ export async function purgeMaintenance(db: Connection) {
   for (const [table, predicate] of [
     ['"session"', "expires_at < now()"],
     ["verification", "expires_at < now()"],
+    ["invitation", "coalesce(accepted_at, expires_at) < now() - interval '30 days'"],
     ["audit_log", "created_at < now() - interval '365 days'"],
     ["rate_limits", "expires_at < now()"],
     ["jobs", "finished_at < now() - interval '7 days'"],

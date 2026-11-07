@@ -174,6 +174,8 @@ export const invitation = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     resendCount: integer("resend_count").default(0).notNull(),
+    resendAt: timestamp("resend_at", { withTimezone: true, mode: "date" }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: "date" }),
   },
   (table) => [
     index("invitation_organizationId_idx").on(table.organizationId),

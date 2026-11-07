@@ -157,6 +157,8 @@ export function makeAuthOptions(tx?: Transaction) {
           invitation: {
             additionalFields: {
               resendCount: { type: "number", required: true, defaultValue: 0, input: false },
+              resendAt: { type: "date", required: false, input: false },
+              acceptedAt: { type: "date", required: false, input: false },
             },
           },
         },
