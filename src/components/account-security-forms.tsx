@@ -88,7 +88,9 @@ export function ForgotPasswordForm() {
         <Input id="reset-email" name="email" type="email" required autoComplete="email" />
       </div>
       {feedback}
-      <Button disabled={pending}>Send reset link</Button>
+      <Button type="submit" disabled={pending}>
+        Send reset link
+      </Button>
       <p>
         <Link href="/login" className="text-sm underline">
           Back to sign in
@@ -132,7 +134,9 @@ export function ResetPasswordForm({ token }: { token?: string }) {
     >
       <PasswordField id="new-password" label="New password" fresh />
       {feedback}
-      <Button disabled={pending}>Reset password</Button>
+      <Button type="submit" disabled={pending}>
+        Reset password
+      </Button>
       <p>
         <Link href="/forgot-password" className="text-sm underline">
           Request a new link
@@ -182,7 +186,9 @@ export function TwoFactorSignIn({ onRestart }: { onRestart: () => void }) {
         />
       </div>
       {feedback}
-      <Button disabled={pending}>Verify and sign in</Button>
+      <Button type="submit" disabled={pending}>
+        Verify and sign in
+      </Button>
       <Button type="button" variant="ghost" disabled={pending} onClick={() => setBackup(!backup)}>
         {backup ? "Use authenticator code" : "Use a backup code"}
       </Button>
@@ -223,7 +229,9 @@ export function ChangePasswordForm() {
         Sign out other sessions
       </label>
       {feedback}
-      <Button disabled={pending}>Change password</Button>
+      <Button type="submit" disabled={pending}>
+        Change password
+      </Button>
     </form>
   );
 }
@@ -322,7 +330,9 @@ export function TwoFactorSettings({ initiallyEnabled }: { initiallyEnabled: bool
     event.preventDefault();
     const element = event.currentTarget;
     const form = new FormData(element);
-    const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") ?? "enable";
+    const action =
+      (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") ??
+      (enabled ? "generate-backup-codes" : "enable");
     await run(async () => {
       const data = await securityRequest(`two-factor/${action}`, {
         password: form.get("2fa-password"),
@@ -392,7 +402,9 @@ export function TwoFactorSettings({ initiallyEnabled }: { initiallyEnabled: bool
                 autoComplete="one-time-code"
               />
             </div>
-            <Button disabled={pending}>Confirm and enable 2FA</Button>
+            <Button type="submit" disabled={pending}>
+              Confirm and enable 2FA
+            </Button>
           </form>
         </div>
       ) : (
@@ -400,15 +412,21 @@ export function TwoFactorSettings({ initiallyEnabled }: { initiallyEnabled: bool
           <PasswordField id="2fa-password" label="Password for two-factor settings" />
           {enabled ? (
             <div className="flex flex-wrap gap-2">
-              <Button disabled={pending} name="action" value="generate-backup-codes">
+              <Button type="submit" disabled={pending} name="action" value="generate-backup-codes">
                 Regenerate backup codes
               </Button>
-              <Button disabled={pending} variant="outline" name="action" value="disable">
+              <Button
+                type="submit"
+                disabled={pending}
+                variant="outline"
+                name="action"
+                value="disable"
+              >
                 Disable 2FA
               </Button>
             </div>
           ) : (
-            <Button disabled={pending} name="action" value="enable">
+            <Button type="submit" disabled={pending} name="action" value="enable">
               Set up 2FA
             </Button>
           )}
@@ -465,7 +483,7 @@ export function DeleteAccountForm() {
         <Input id="confirmation" name="confirmation" required pattern="DELETE" autoComplete="off" />
       </div>
       {feedback}
-      <Button variant="destructive" disabled={pending}>
+      <Button type="submit" variant="destructive" disabled={pending}>
         Delete account permanently
       </Button>
     </form>

@@ -86,7 +86,9 @@ export function ResendEmail({ initialEmail = "" }: { initialEmail?: string }) {
           required
         />
       </div>
-      <Button disabled={pending}>Resend email</Button>
+      <Button type="submit" disabled={pending}>
+        Resend email
+      </Button>
       {message && (
         <p role="status" className="text-sm">
           {message}
@@ -281,7 +283,9 @@ export function AccountForm({ name }: { name: string }) {
         </p>
       )}
       {state.success && <p role="status">{state.success}</p>}
-      <Button disabled={pending}>Save name</Button>
+      <Button type="submit" disabled={pending}>
+        Save name
+      </Button>
     </form>
   );
 }
