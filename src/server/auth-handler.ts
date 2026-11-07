@@ -74,6 +74,18 @@ export async function handleAuth(request: Request): Promise<Response> {
     )
   )
     return fail("Not found", 404);
+  // Better Auth's endpoint parser keeps the first duplicate cookie while its
+  // exported parser keeps the last. Refuse ambiguity before either parser runs,
+  // so the limiter and verifier cannot act on different sessions/challenges.
+  const cookieNames = new Set<string>();
+  for (const cookie of (request.headers.get("cookie") ?? "").split(";")) {
+    const separator = cookie.indexOf("=");
+    if (separator < 1) continue;
+    const name = cookie.slice(0, separator).trim();
+    if (cookieNames.has(name))
+      return fail("Duplicate cookies are not allowed.", 400, "DUPLICATE_COOKIES");
+    cookieNames.add(name);
+  }
   if (!process.env.BETTER_AUTH_SECRET || !process.env.DATABASE_URL)
     return fail("Account sign-in is not configured.", 503);
   if (request.method === "POST" && request.headers.get("origin") !== appOrigin())
